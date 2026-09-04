@@ -171,7 +171,7 @@
 		if (forceUpdate || rangeChanged)
 		{
 			tft.fillRect(SEGMENT_X - 3, 24,
-				SEGMENT_PITCH * (SEGMENT_COUNT - 1) + SEGMENT_WIDTH + 6,
+				SEGMENT_PITCH * (SEGMENT_COUNT - 1) + SEGMENT_WIDTH + 3,
 				6, background);
 			if (state.rpmAlertRangeValid)
 			{
@@ -334,7 +334,8 @@
 		for (int i = 0; i < 4; ++i)
 		{
 			if (i > 0) cacheState += ":";
-			cacheState += isfinite(state.tyreTemperatures[i])
+			cacheState += isfinite(state.tyreTemperatures[i]) &&
+				state.tyreTemperatures[i] > 0.0f
 				? String(lroundf(state.tyreTemperatures[i])) : String("--");
 		}
 		if (!forceUpdate && prevData["telemetryTyres"] == cacheState) return;
@@ -363,7 +364,8 @@
 					? String(lroundf(state.tyreTemperatures[i])) : "--",
 					centerX, 17, 1);
 				sprite.fillRoundRect(centerX - 7, 24, 14, 3, 1,
-					valid ? tyreTemperatureColor(state.tyreTemperatures[i])
+					valid ? tyreTemperatureColor(
+						static_cast<float>(lroundf(state.tyreTemperatures[i])))
 						: tft.color565(36, 49, 65));
 			}
 			sprite.pushSprite(213, 205);
@@ -385,7 +387,8 @@
 					? String(lroundf(state.tyreTemperatures[i])) : "--",
 					centerX, 222, 1);
 				tft.fillRoundRect(centerX - 7, 229, 14, 3, 1,
-					valid ? tyreTemperatureColor(state.tyreTemperatures[i])
+					valid ? tyreTemperatureColor(
+						static_cast<float>(lroundf(state.tyreTemperatures[i])))
 						: tft.color565(36, 49, 65));
 			}
 			tft.setTextDatum(TL_DATUM);
@@ -454,7 +457,7 @@
 		}
 
 		const int displayedRpm = ((state.engineRpm + 25) / 50) * 50;
-		drawTelemetryValue(31, 7, 39, 21, String(displayedRpm),
+		drawTelemetryValue(31, 8, 39, 20, String(displayedRpm),
 			"telemetryRpmValue",
 			state.revLimitAlertActive ? rose : TFT_WHITE,
 			card, 1, MC_DATUM, forceUpdate);
