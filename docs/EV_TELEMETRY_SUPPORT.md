@@ -14,7 +14,7 @@ Expected touch points:
 
 - one GT7 telemetry-to-dashboard mapping function;
 - the dashboard state and fixed Theme Preview mock data;
-- the existing fuel label/value/progress paths in all six themes;
+- the existing fuel label/value/progress paths in all seven themes;
 - the remaining-laps (`REM`/`LEFT`) output;
 - focused ICE, EV, invalid-data and vehicle-transition tests.
 
@@ -143,7 +143,7 @@ latest raw value without interpolation or an artificial consumption estimate.
 
 ## Theme integration
 
-All six themes should preserve their current geometry, fonts, icon shapes and colors.
+All seven themes should preserve their current geometry, fonts, icon shapes and colors.
 Only the following content becomes dynamic:
 
 - `FUEL` changes to `EV` for an EV;
@@ -165,6 +165,6 @@ requiring a theme switch or reboot.
 6. Invalid values show `--` without NaN, overflow or a misleading low-fuel warning.
 7. Switching ICE -> EV -> ICE refreshes labels, values, progress and remaining laps without
    stale pixels or a full-screen flicker.
-8. All six themes preserve their existing layout at one-, two- and three-digit EV values.
+8. All seven themes preserve their existing layout at one-, two- and three-digit EV values.
 9. At least two GT7 EVs are compared with the native HUD to validate that `fuelLevel`
    behaves like remaining kWh before the feature is released.

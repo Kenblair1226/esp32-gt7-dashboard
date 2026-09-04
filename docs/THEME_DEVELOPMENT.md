@@ -26,6 +26,7 @@ The included themes are:
 | `Radar` | 3 | `drawRadarDashboard()` | Circular tachometer-focused dark UI |
 | `Mono` | 4 | `drawMonoDashboard()` | Monochrome retro-digital instrument UI |
 | `Pocket` | 5 | `drawPocketDashboard()` | Four-tone handheld pixel instrument UI |
+| `Telemetry` | 6 | `drawTelemetryDashboard()` | Dense dark card UI with electric telemetry accents |
 
 Persisted values are part of the device settings format. Never reorder or reuse an existing enum value.
 
