@@ -75,7 +75,7 @@
 
 ## 儀表主題
 
-同一份韌體內建六種儀表主題，並提供相同的即時 GT7 遙測功能：
+同一份韌體內建七種儀表主題，並提供相同的即時 GT7 遙測功能：
 
 - **GT3**（預設）— 置中檔位、弧形換檔燈與深色賽車風格版面。
 - **Classic** — 原本偏工程風格的五欄儀表板。
@@ -83,6 +83,7 @@
 - **Radar** — 以圓形轉速環為核心、兩側配置遙測資訊的深色儀表板。
 - **Mono** — 黑底白字的簡約數位儀表，搭配分段式換檔燈。
 - **Pocket** — 以 Game Boy 為靈感的黃綠色像素儀表，使用方塊遙測資訊與精簡的駕駛輔助圖示。
+- **Endurance** — 以掃讀效率為核心，整合換檔燈、中央檔位、圈速、胎溫、踏板輸入與燃油策略的耐久賽儀表。
 
 <p align="center">
   <img src="photos/theme_all.jpg" width="900" alt="Classic、GT3、Radar 與 Retro 四種儀表主題預覽">
@@ -165,13 +166,13 @@ http://192.168.4.1
 
 - 螢幕亮起時開啟設定選單。
 - 螢幕休眠時只喚醒顯示，第一次點擊不會同時進入設定。
-- 選擇並儲存 Classic、GT3、Retro、Radar、Mono 或 Pocket 儀表主題。
+- 選擇並儲存 Classic、GT3、Retro、Radar、Mono、Pocket 或 Endurance 儀表主題。
 - 進入 **DEVICE SETTINGS**，以 10% 級距調整 20%～100% 的亮度。
 - 從 Device Settings 透過獨立確認畫面重設已儲存的 Wi-Fi。
 
 亮度預設為 80%，調整後會儲存，重新開機或喚醒時會恢復；自動休眠仍會完全關閉背光。
 
-沒有儲存過主題時會使用 GT3。Classic、GT3、Retro、Radar、Mono 與 Pocket 顯示相同的支援遙測資料，只有呈現方式不同。
+沒有儲存過主題時會使用 GT3。Classic、GT3、Retro、Radar、Mono、Pocket 與 Endurance 顯示相同的支援遙測資料，只有呈現方式不同。
 
 <p align="center">
   <img src="photos/003.jpg" width="900" alt="ESP32 GT7 Dashboard">

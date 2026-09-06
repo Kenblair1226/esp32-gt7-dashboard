@@ -134,6 +134,7 @@ enum class DashboardTheme : uint8_t
 	Radar = 3,
 	Mono = 4,
 	Pocket = 5,
+	Endurance = 6,
 };
 
 struct DashboardThemeDescriptor
@@ -149,6 +150,7 @@ static constexpr DashboardThemeDescriptor DASHBOARD_THEMES[] = {
 	{DashboardTheme::Radar, "RADAR"},
 	{DashboardTheme::Mono, "MONO"},
 	{DashboardTheme::Pocket, "POCKET"},
+	{DashboardTheme::Endurance, "ENDURANCE"},
 };
 static constexpr size_t DASHBOARD_THEME_COUNT =
 	sizeof(DASHBOARD_THEMES) / sizeof(DASHBOARD_THEMES[0]);
@@ -548,7 +550,7 @@ private:
 			? static_cast<DashboardTheme>(storedTheme)
 			: DashboardTheme::GT3;
 
-#if GT7_DASHBOARD_THEME_PREVIEW >= 0 && GT7_DASHBOARD_THEME_PREVIEW <= 5
+#if GT7_DASHBOARD_THEME_PREVIEW >= 0 && GT7_DASHBOARD_THEME_PREVIEW <= 6
 		activeDashboardTheme =
 			static_cast<DashboardTheme>(GT7_DASHBOARD_THEME_PREVIEW);
 #endif
@@ -1304,6 +1306,9 @@ public:
 		case DashboardTheme::Pocket:
 			drawPocketDashboard(state, forceUpdate);
 			break;
+		case DashboardTheme::Endurance:
+			drawEnduranceDashboard(state, forceUpdate);
+			break;
 		case DashboardTheme::GT3:
 		default:
 #if GT7_DASHBOARD_LEGACY_UI
@@ -1345,6 +1350,8 @@ public:
 #include "dashboard/themes/MonoTheme.inc"
 
 #include "dashboard/themes/PocketTheme.inc"
+
+#include "dashboard/themes/EnduranceTheme.inc"
 
 	void drawThemePlaceholder(
 		const DashboardState &state,

@@ -74,7 +74,7 @@ Currently supported:
 
 ## Dashboard Themes
 
-One firmware includes six dashboard themes with the same live GT7 telemetry features:
+One firmware includes seven dashboard themes with the same live GT7 telemetry features:
 
 - **GT3** (default) — centered gear, curved shift-light bar and a dark motorsport layout.
 - **Classic** — the original engineering-style five-column dashboard.
@@ -82,6 +82,7 @@ One firmware includes six dashboard themes with the same live GT7 telemetry feat
 - **Radar** — a circular tachometer-focused dark layout with side telemetry panels.
 - **Mono** — a minimal black-and-white digital dashboard with a segmented shift-light bar.
 - **Pocket** — a Game Boy-inspired pixel dashboard with a yellow-green display palette, block telemetry and compact driving-aid icons.
+- **Endurance** — a glance-first race display with shift lights, a central gear tower, lap timing, tyre temperatures, pedal inputs and fuel strategy.
 
 <p align="center">
   <img src="photos/theme_all.jpg" width="900" alt="Classic, GT3, Radar and Retro dashboard theme previews">
@@ -172,13 +173,13 @@ saved, repeat the same procedure from the waiting screen to replace it.
 
 - Open Settings while the display is active.
 - Wake the display when it is asleep; the first tap does not also open Settings.
-- Select and save the Classic, GT3, Retro, Radar, Mono, or Pocket dashboard theme.
+- Select and save the Classic, GT3, Retro, Radar, Mono, Pocket, or Endurance dashboard theme.
 - Open **DEVICE SETTINGS** to adjust brightness from 20% to 100% in 10% steps.
 - Reset saved Wi-Fi from Device Settings through a separate confirmation screen.
 
 Brightness defaults to 80%, is saved after adjustment, and is restored after reboot or wake. Automatic sleep still turns the backlight fully off.
 
-GT3 is used when no theme has been saved. Classic, GT3, Retro, Radar, Mono and Pocket expose the same supported telemetry; only their presentation differs.
+GT3 is used when no theme has been saved. Classic, GT3, Retro, Radar, Mono, Pocket and Endurance expose the same supported telemetry; only their presentation differs.
 
 <p align="center">
   <img src="photos/003.jpg" width="900" alt="ESP32 GT7 Dashboard">
@@ -304,4 +305,3 @@ This project is released under the MIT License.
 If this dashboard has been useful to you, you can support its continued development:
 
 ☕ [**Support me on Ko-fi**](https://ko-fi.com/caa1211)
-
