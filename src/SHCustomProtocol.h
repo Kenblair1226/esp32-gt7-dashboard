@@ -10,9 +10,13 @@
 //  dashboard + free deck grafica
 #include <Arduino.h>
 #include <Preferences.h>
+#include <cstdio>
+#include <cstring>
 #include <map>
 #include <BleGamepad.h> // libreria bluetooth
 #include <GT7DerivedMetrics.h>
+#include <FirmwareUpdate.h>
+#include "ota_config.h"
 #include "version.h"
 
 static LGFX tft;
@@ -319,6 +323,9 @@ private:
 	uint8_t userBrightnessPercent = DEFAULT_BRIGHTNESS_PERCENT;
 	uint8_t currentBrightness = 255;
 	bool brightnessSavePending = false;
+	bool brightnessSaveFailureReported = false;
+	bool themeSavePending = false;
+	bool touchRotationSavePending = false;
 	unsigned long brightnessChangedTime = 0;
 	unsigned long gameStoppedTime = 0;
 
@@ -337,13 +344,19 @@ private:
 		DeviceSettings,
 		WifiResetConfirmation,
 		TouchCalibration,
+		FirmwareUpdate,
 	};
 
 	static constexpr unsigned long SETTINGS_TIMEOUT_MS = 15000UL;
 	static constexpr unsigned long TOUCH_CALIBRATION_DOUBLE_TAP_MS = 3000UL;
+	static constexpr int DEVICE_BRIGHTNESS_Y = 62;
+	static constexpr int DEVICE_FIRMWARE_Y = 118;
+	static constexpr int DEVICE_BOTTOM_Y = 180;
 	SettingsScreen settingsScreen = SettingsScreen::Closed;
 	unsigned long settingsLastInteractionTime = 0;
 	int settingsPressedButton = -1;
+	bool touchWasPressed = false;
+	bool waitForReleaseAfterScreenChange = false;
 	bool wifiResetConfirmOpen = false;
 	bool wifiResetRequested = false;
 
@@ -501,9 +514,28 @@ private:
 		if (!brightnessSavePending ||
 			millis() - brightnessChangedTime < BRIGHTNESS_SAVE_DELAY_MS)
 			return;
-		if (dashboardPreferencesReady)
-			dashboardPreferences.putUChar("brightness", userBrightnessPercent);
-		brightnessSavePending = false;
+		if (!savePendingBrightnessPreference())
+			brightnessChangedTime = millis();
+	}
+
+	bool savePendingBrightnessPreference()
+	{
+		const bool saved = savePendingDashboardPreference(
+			"brightness", userBrightnessPercent, brightnessSavePending);
+		if (!saved && !brightnessSaveFailureReported)
+			Serial.println("Brightness preference save failed; retrying. Keep power on; OTA restart waits for settings to save.");
+		brightnessSaveFailureReported = !saved;
+		return saved;
+	}
+
+	bool savePendingDashboardPreference(const char *key, uint8_t value, bool &pending)
+	{
+		if (!pending) return true;
+		if (!dashboardPreferencesReady ||
+			dashboardPreferences.putUChar(key, value) != sizeof(value))
+			return false;
+		pending = false;
+		return true;
 	}
 
 	void invalidateDashboardRenderer()
@@ -1199,10 +1231,12 @@ public:
 		updateGT7GameState();
 #endif
 
+		refreshFirmwareUpdateScreen();
+
 		/*
 		 * GT7 停止五分鐘，自動關閉背光。
 		 */
-		if (!screenSleeping &&
+		if (!firmwareUpdateBusy() && !screenSleeping &&
 			gameStoppedTimerStarted &&
 			millis() - gameStoppedTime >= SCREEN_SLEEP_TIMEOUT)
 		{
@@ -1650,6 +1684,8 @@ public:
 		tft.drawString(label, x + width / 2, y + height / 2, 2);
 	}
 
+#include "dashboard/FirmwareUpdateScreen.inc"
+
 	void drawDeviceBrightnessValue()
 	{
 		static LGFX_Sprite brightnessSprite(&tft);
@@ -1666,14 +1702,15 @@ public:
 			brightnessSprite.setTextDatum(MC_DATUM);
 			brightnessSprite.drawString(
 				String(userBrightnessPercent) + "%", 58, 24, 4);
-			brightnessSprite.pushSprite(102, 72);
+			brightnessSprite.pushSprite(102, DEVICE_BRIGHTNESS_Y);
 		}
 		else
 		{
-			tft.fillRect(102, 72, 116, 48, TFT_BLACK);
+			tft.fillRect(102, DEVICE_BRIGHTNESS_Y, 116, 48, TFT_BLACK);
 			tft.setTextColor(TFT_WHITE, TFT_BLACK);
 			tft.setTextDatum(MC_DATUM);
-			tft.drawString(String(userBrightnessPercent) + "%", X_CENTER, 96, 4);
+			tft.drawString(String(userBrightnessPercent) + "%",
+				X_CENTER, DEVICE_BRIGHTNESS_Y + 24, 4);
 		}
 	}
 
@@ -1819,13 +1856,15 @@ public:
 			tft.setTextColor(TFT_WHITE, TFT_BLACK);
 			tft.drawString("DEVICE SETTINGS", X_CENTER, 20, 4);
 			tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-			tft.drawString("BRIGHTNESS", X_CENTER, 53, 2);
-			drawSettingsButton(30, 72, 70, 48, "-", pressedButton == 0);
-			drawSettingsButton(220, 72, 70, 48, "+", pressedButton == 1);
+			tft.drawString("BRIGHTNESS", X_CENTER, 46, 2);
+			drawSettingsButton(30, DEVICE_BRIGHTNESS_Y, 70, 48, "-", pressedButton == 0);
+			drawSettingsButton(220, DEVICE_BRIGHTNESS_Y, 70, 48, "+", pressedButton == 1);
 			drawDeviceBrightnessValue();
-			drawSettingsButton(30, 132, 260, 38, "RESET WIFI", pressedButton == 2,
+			drawSettingsButton(30, DEVICE_FIRMWARE_Y, 260, 48, "FIRMWARE UPDATE",
+				pressedButton == 2);
+			drawSettingsButton(25, DEVICE_BOTTOM_Y, 125, 48, "RESET WIFI", pressedButton == 3,
 				false, true);
-			drawSettingsButton(30, 182, 260, 38, "BACK", pressedButton == 3);
+			drawSettingsButton(170, DEVICE_BOTTOM_Y, 125, 48, "BACK", pressedButton == 4);
 		}
 		else if (settingsScreen == SettingsScreen::WifiResetConfirmation)
 		{
@@ -1840,6 +1879,10 @@ public:
 		else if (settingsScreen == SettingsScreen::TouchCalibration)
 		{
 			drawTouchCalibrationScreen(pressedButton);
+		}
+		else if (settingsScreen == SettingsScreen::FirmwareUpdate)
+		{
+			drawFirmwareUpdateScreen();
 		}
 
 		tft.setTextDatum(TL_DATUM);
@@ -1864,14 +1907,16 @@ public:
 		else if (settingsScreen == SettingsScreen::DeviceSettings)
 		{
 			if (button == 0)
-				drawSettingsButton(30, 72, 70, 48, "-", pressed);
+				drawSettingsButton(30, DEVICE_BRIGHTNESS_Y, 70, 48, "-", pressed);
 			else if (button == 1)
-				drawSettingsButton(220, 72, 70, 48, "+", pressed);
+				drawSettingsButton(220, DEVICE_BRIGHTNESS_Y, 70, 48, "+", pressed);
 			else if (button == 2)
-				drawSettingsButton(30, 132, 260, 38, "RESET WIFI", pressed,
-					false, true);
+				drawSettingsButton(30, DEVICE_FIRMWARE_Y, 260, 48, "FIRMWARE UPDATE", pressed);
 			else if (button == 3)
-				drawSettingsButton(30, 182, 260, 38, "BACK", pressed);
+				drawSettingsButton(25, DEVICE_BOTTOM_Y, 125, 48, "RESET WIFI", pressed,
+					false, true);
+			else if (button == 4)
+				drawSettingsButton(170, DEVICE_BOTTOM_Y, 125, 48, "BACK", pressed);
 		}
 		else if (settingsScreen == SettingsScreen::WifiResetConfirmation)
 		{
@@ -1889,11 +1934,23 @@ public:
 				drawSettingsButton(170, 169, 125, 50, "SAVE", pressed,
 					touchCalibrationVerified);
 		}
+		else if (settingsScreen == SettingsScreen::FirmwareUpdate)
+		{
+			drawFirmwareUpdateButton(button, pressed);
+		}
 		tft.setTextDatum(TL_DATUM);
 	}
 
 	void showSettingsScreen(SettingsScreen screen)
 	{
+		if (firmwareUpdateBusy() && screen != SettingsScreen::FirmwareUpdate)
+			return;
+		if (settingsScreen != screen)
+		{
+			firmwareUpdateAction = FirmwareUpdate::Action::None;
+			firmwareUpdateConfirmInstall = false;
+			waitForReleaseAfterScreenChange = true;
+		}
 		screenSleeping = false;
 		screenOffByUser = false;
 		tft.setBrightness(normalBrightness());
@@ -1908,11 +1965,16 @@ public:
 		wifiResetConfirmOpen = screen == SettingsScreen::WifiResetConfirmation;
 		settingsPressedButton = -1;
 		settingsLastInteractionTime = millis();
+		firmwareUpdateLastGameActive = previousGameRunning;
 		drawSettingsScreen();
 	}
 
 	void closeSettings()
 	{
+		if (firmwareUpdateBusy()) return;
+		firmwareUpdateAction = FirmwareUpdate::Action::None;
+		firmwareUpdateConfirmInstall = false;
+		waitForReleaseAfterScreenChange = true;
 		settingsScreen = SettingsScreen::Closed;
 		previewFullscreen = false;
 		wifiResetConfirmOpen = false;
@@ -1922,11 +1984,12 @@ public:
 		touchCalibrationAwaitingSecondTap = false;
 		touchCalibrationFirstTapTime = 0;
 		pendingTouchRotation = touchRotation;
-		redrawAfterWifiResetDialog();
+		invalidateDashboardRenderer();
 	}
 
 	void showTouchCalibration(TouchRotation candidate)
 	{
+		if (firmwareUpdateBusy()) return;
 		pendingTouchRotation = candidate;
 		touchCalibrationVerified = false;
 		showSettingsScreen(SettingsScreen::TouchCalibration);
@@ -1979,6 +2042,7 @@ public:
 
 	void showWifiResettingScreen()
 	{
+		if (firmwareUpdateBusy()) return;
 		tft.fillScreen(TFT_BLACK);
 		tft.setTextPadding(0);
 		tft.setTextDatum(MC_DATUM);
@@ -1994,6 +2058,11 @@ public:
 
 	bool takeWifiResetRequest()
 	{
+		if (firmwareUpdateBusy())
+		{
+			wifiResetRequested = false;
+			return false;
+		}
 		if (!wifiResetRequested)
 		{
 			return false;
@@ -2005,6 +2074,8 @@ public:
 
 	int settingsButtonAtTouch() const
 	{
+		if (firmwareUpdateBusy() && settingsScreen != SettingsScreen::FirmwareUpdate)
+			return -1;
 		if (settingsScreen == SettingsScreen::Main)
 		{
 			if (touchInside(30, 55, 260, 48)) return 0;
@@ -2023,10 +2094,11 @@ public:
 		}
 		else if (settingsScreen == SettingsScreen::DeviceSettings)
 		{
-			if (touchInside(30, 72, 70, 48)) return 0;
-			if (touchInside(220, 72, 70, 48)) return 1;
-			if (touchInside(30, 132, 260, 38)) return 2;
-			if (touchInside(30, 182, 260, 38)) return 3;
+			if (touchInside(30, DEVICE_BRIGHTNESS_Y, 70, 48)) return 0;
+			if (touchInside(220, DEVICE_BRIGHTNESS_Y, 70, 48)) return 1;
+			if (touchInside(30, DEVICE_FIRMWARE_Y, 260, 48)) return 2;
+			if (touchInside(25, DEVICE_BOTTOM_Y, 125, 48)) return 3;
+			if (touchInside(170, DEVICE_BOTTOM_Y, 125, 48)) return 4;
 		}
 		else if (settingsScreen == SettingsScreen::WifiResetConfirmation)
 		{
@@ -2042,11 +2114,17 @@ public:
 			if (touchInside(25, 169, 125, 50) || originalCancel) return 1;
 			if (touchCalibrationVerified && touchInside(170, 169, 125, 50)) return 2;
 		}
+		else if (settingsScreen == SettingsScreen::FirmwareUpdate)
+		{
+			return firmwareUpdateButtonAtTouch();
+		}
 		return -1;
 	}
 
 	void activateSettingsButton(int button)
 	{
+		if (firmwareUpdateBusy() && settingsScreen != SettingsScreen::FirmwareUpdate)
+			return;
 		if (settingsScreen == SettingsScreen::Main)
 		{
 			if (button == 0)
@@ -2086,7 +2164,12 @@ public:
 				wifiResetConfirmOpen = false;
 				settingsPressedButton = -1;
 				previewFullscreen = false;
-				selectDashboardTheme(selectedTheme, true);
+				waitForReleaseAfterScreenChange = true;
+				selectDashboardTheme(selectedTheme, false);
+				themeSavePending = true;
+				if (!savePendingDashboardPreference("theme",
+						static_cast<uint8_t>(selectedTheme), themeSavePending))
+					Serial.println("Theme preference save failed; retained for retry before update restart.");
 				if (!changed) redrawAfterWifiResetDialog();
 			}
 			else if (button == 5)
@@ -2114,9 +2197,13 @@ public:
 			}
 			else if (button == 2)
 			{
-				showWifiResetConfirm();
+				showSettingsScreen(SettingsScreen::FirmwareUpdate);
 			}
 			else if (button == 3)
+			{
+				showWifiResetConfirm();
+			}
+			else if (button == 4)
 			{
 				showSettingsScreen(SettingsScreen::Main);
 			}
@@ -2148,11 +2235,16 @@ public:
 			else if (button == 2 && touchCalibrationVerified)
 			{
 				touchRotation = pendingTouchRotation;
-				if (dashboardPreferencesReady)
-					dashboardPreferences.putUChar(
-						"touchRot", static_cast<uint8_t>(touchRotation));
+				touchRotationSavePending = true;
+				if (!savePendingDashboardPreference("touchRot",
+						static_cast<uint8_t>(touchRotation), touchRotationSavePending))
+					Serial.println("Touch preference save failed; retained for retry before update restart.");
 				closeSettings();
 			}
+		}
+		else if (settingsScreen == SettingsScreen::FirmwareUpdate)
+		{
+			activateFirmwareUpdateButton(button);
 		}
 	}
 
@@ -2164,8 +2256,6 @@ public:
 			return;
 		}
 
-		static bool wasTouched = false;
-		static bool waitForReleaseAfterScreenChange = false;
 		uint16_t rawTouchX = 0;
 		uint16_t rawTouchY = 0;
 		const bool isTouched = tft.getTouch(&rawTouchX, &rawTouchY);
@@ -2197,7 +2287,8 @@ public:
 			if (!isTouched)
 			{
 				waitForReleaseAfterScreenChange = false;
-				wasTouched = false;
+				touchWasPressed = false;
+				settingsPressedButton = -1;
 			}
 			return;
 		}
@@ -2206,7 +2297,7 @@ public:
 		// tap only restores the display; it never activates a hidden button.
 		if (screenSleeping)
 		{
-			if (!isTouched && wasTouched)
+			if (!isTouched && touchWasPressed)
 			{
 				screenSleeping = false;
 				screenOffByUser = false;
@@ -2225,11 +2316,11 @@ public:
 				if (settingsScreen != SettingsScreen::Closed)
 					drawSettingsScreen();
 			}
-			wasTouched = isTouched;
+			touchWasPressed = isTouched;
 			return;
 		}
 
-		if (isTouched && !wasTouched && !previousGameRunning)
+		if (isTouched && !touchWasPressed && !previousGameRunning)
 		{
 			gameStoppedTimerStarted = true;
 			gameStoppedTime = millis();
@@ -2252,37 +2343,42 @@ public:
 
 		if (settingsScreen != SettingsScreen::Closed)
 		{
-			if (!isTouched && settingsLastInteractionTime != 0 &&
+			if (!firmwareUpdateBusy() && !isTouched && !touchWasPressed &&
+				settingsLastInteractionTime != 0 &&
 				millis() - settingsLastInteractionTime >= SETTINGS_TIMEOUT_MS)
 			{
 				closeSettings();
-				wasTouched = false;
+				touchWasPressed = false;
 				return;
 			}
 
-			if (isTouched && !wasTouched)
+			if (isTouched && !touchWasPressed)
 			{
 				settingsLastInteractionTime = millis();
 				settingsPressedButton = settingsButtonAtTouch();
+				if (settingsScreen == SettingsScreen::FirmwareUpdate &&
+					settingsPressedButton >= 0)
+					redrawSettingsButton(settingsPressedButton, true);
 			}
-			else if (!isTouched && wasTouched)
+			else if (!isTouched && touchWasPressed)
 			{
 				settingsLastInteractionTime = millis();
 				const int releasedButton = settingsButtonAtTouch();
 				const int pressedButton = settingsPressedButton;
 				settingsPressedButton = -1;
+				if (settingsScreen == SettingsScreen::FirmwareUpdate && pressedButton >= 0)
+					redrawSettingsButton(pressedButton, false);
 				if (pressedButton >= 0 && releasedButton == pressedButton)
 				{
 					activateSettingsButton(pressedButton);
-					waitForReleaseAfterScreenChange = true;
 				}
 			}
 
-			wasTouched = isTouched;
+			touchWasPressed = isTouched;
 			return;
 		}
 
-		if (!isTouched && wasTouched)
+		if (!isTouched && touchWasPressed)
 		{
 			if (touchCalibrationEntryArmed)
 			{
@@ -2309,7 +2405,7 @@ public:
 			waitForReleaseAfterScreenChange = true;
 		}
 
-		wasTouched = isTouched;
+		touchWasPressed = isTouched;
 	}
 
 #if 0

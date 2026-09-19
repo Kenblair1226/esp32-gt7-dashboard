@@ -1,4 +1,11 @@
 {
+  "1.9.0": [
+    "Added manual GitHub firmware updates from Device Settings with installation confirmation, progress, cancellation and actionable errors.",
+    "Added verified HTTPS downloads, SHA-256 and firmware identity checks, and protected inactive-slot writes for both display variants.",
+    "Enabled the dual-slot flash layout; existing single-slot devices require one complete USB migration before using OTA.",
+    "Added CI-built draft releases and tooling to keep accepted OTA and Web Installer firmware identical.",
+    "Preserved Wi-Fi, theme, brightness and touch orientation through OTA; automatic bad-boot rollback is not enabled."
+  ],
   "1.8.0": [
     "Added EV detection from GT7 fuel-capacity telemetry across all six dashboard themes.",
     "Added compact whole-number EV energy display and vehicle-aware FUEL or EV labels.",

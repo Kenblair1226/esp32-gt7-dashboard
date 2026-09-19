@@ -161,6 +161,11 @@ Run both targets:
 platformio run -e esp32 -e esp32-st7789
 ```
 
+Both variants use the dual-slot `min_spiffs.csv` layout. Each application must fit
+within `0x1E0000` (1,966,080) bytes; switching back to `huge_app.csv` to fit another
+theme would disable OTA. Keep enough runtime heap available for a user-requested
+HTTPS update after switching among themes, as well as for ordinary rendering.
+
 For each display controller, verify:
 
 - fresh boot and telemetry connection

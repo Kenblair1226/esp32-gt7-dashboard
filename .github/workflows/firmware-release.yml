@@ -1,0 +1,124 @@
+name: Build draft firmware release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'Kenblair1226/esp32-gt7-dashboard'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      artifact-id: ${{ steps.artifact.outputs.artifact-id }}
+    steps:
+      - name: Check out tagged firmware
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Verify strict tag, version, header and release notes before building
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/firmware-release.mjs verify-tag "$RELEASE_TAG"
+
+      - name: Test release tooling
+        run: node --test scripts/tests/*.test.mjs
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned PlatformIO core
+        run: python -m pip install --disable-pip-version-check platformio==6.1.18
+
+      - name: Build and package both display panels
+        run: node scripts/publish-firmware.mjs
+
+      - name: Package exact USB payloads and verify release
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          node scripts/firmware-release.mjs verify-tag "$RELEASE_TAG"
+          node scripts/firmware-release.mjs validate .pio/release "${RELEASE_TAG#v}"
+          python - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
+
+          root = Path(".pio/release")
+          payloads = [
+              "ota-manifest.json", "firmware-ili9341.bin", "firmware-st7789.bin",
+              "bootloader.bin", "partitions.bin", "boot_app0.bin",
+              "manifest-ili9341.json", "manifest-st7789.json", "release.json",
+          ]
+          with ZipFile(root / "usb-installer.zip", "w", compression=ZIP_DEFLATED) as archive:
+              for name in payloads:
+                  info = ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                  info.compress_type = ZIP_DEFLATED
+                  info.external_attr = 0o644 << 16
+                  archive.writestr(info, (root / name).read_bytes())
+          with ZipFile(root / "usb-installer.zip") as archive:
+              assert archive.namelist() == payloads
+              for name in payloads:
+                  assert archive.read(name) == (root / name).read_bytes()
+          PY
+          node scripts/firmware-release.mjs checksums .pio/release
+          node scripts/firmware-release.mjs validate .pio/release "${RELEASE_TAG#v}"
+
+      - name: Upload firmware for inspection and draft publication
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ github.ref_name }}-attempt-${{ github.run_attempt }}
+          path: .pio/release/
+          if-no-files-found: error
+          retention-days: 14
+
+  draft:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: Kenblair1226/esp32-gt7-dashboard
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - name: Check out release validation tools
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Download the tested build artifact
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          merge-multiple: true
+          path: .pio/release/
+
+      - name: Create or safely resume the unpublished draft
+        shell: bash
+        run: |
+          node scripts/firmware-release.mjs verify-tag "$RELEASE_TAG"
+          node scripts/stage-published-installer.mjs draft .pio/release "$RELEASE_TAG" "$(git rev-parse HEAD)"

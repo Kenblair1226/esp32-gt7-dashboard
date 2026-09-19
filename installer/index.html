@@ -11,15 +11,15 @@
     <meta property="og:type" content="website">
     <meta property="og:title" content="ESP32 GT7 Dashboard Installer">
     <meta property="og:description" content="Install the ESP32 GT7 Dashboard with six switchable GT7 telemetry themes.">
-    <meta property="og:url" content="https://caa1211.github.io/esp32-gt7-dashboard/">
-    <meta property="og:image" content="https://caa1211.github.io/esp32-gt7-dashboard/og-image.jpg?v=2">
+    <meta property="og:url" content="https://kenblair1226.github.io/esp32-gt7-dashboard/">
+    <meta property="og:image" content="https://kenblair1226.github.io/esp32-gt7-dashboard/og-image.jpg?v=2">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
     <meta property="og:image:alt" content="Classic, GT3, Retro, Radar, Mono and Pocket ESP32 GT7 Dashboard themes">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="ESP32 GT7 Dashboard Installer">
     <meta name="twitter:description" content="Install the ESP32 GT7 Dashboard with six switchable GT7 telemetry themes.">
-    <meta name="twitter:image" content="https://caa1211.github.io/esp32-gt7-dashboard/og-image.jpg?v=2">
+    <meta name="twitter:image" content="https://kenblair1226.github.io/esp32-gt7-dashboard/og-image.jpg?v=2">
     <title>ESP32 GT7 Dashboard Installer</title>
     <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
     <style>
@@ -582,6 +582,9 @@
       <p class="compatibility-warning" id="compatibility-warning">
         ⚠️ ESP32-2432S028 only. Installing replaces the firmware currently on the device.
       </p>
+      <p class="compatibility-warning" id="ota-notice">
+        OTA requires a one-time full USB installation of an OTA-capable version. Legacy versions are USB-only; installing their old flash layout disables OTA until you reinstall an OTA-capable version over USB.
+      </p>
 
       <figure class="theme-preview">
         <img src="theme_all.jpg?v=2" alt="ESP32 GT7 Dashboard theme collection">
@@ -613,7 +616,7 @@
 
       <footer id="page-footer">
         Firmware source and release instructions are available in the
-        <a href="https://github.com/caa1211/esp32-gt7-dashboard">GitHub repository</a>.
+        <a href="https://github.com/Kenblair1226/esp32-gt7-dashboard">GitHub repository</a>.
       </footer>
     </main>
 
@@ -662,6 +665,10 @@
           connect: "Connect & install",
           unsupported: "Use Chrome, Edge, or another Web Serial browser",
           warning: "⚠️ ESP32-2432S028 only. Installing replaces the firmware currently on the device.",
+          otaNotice: "OTA requires a one-time full USB installation of an OTA-capable version. Legacy versions are USB-only; installing their old flash layout disables OTA until you reinstall an OTA-capable version over USB.",
+          legacyWarning: "⚠️ Selected version is USB-only. Installing its legacy flash layout disables OTA until you reinstall an OTA-capable version over USB.",
+          otaCapable: "OTA capable",
+          usbOnly: "USB only",
           caption: "Six switchable themes. The same live GT7 telemetry in every layout.",
           complete: "✅ Installation complete",
           next: "Next steps:",
@@ -697,6 +704,10 @@
           connect: "連接並安裝",
           unsupported: "請使用 Chrome、Edge 或其他支援 Web Serial 的瀏覽器",
           warning: "⚠️ 僅適用於 ESP32-2432S028。安裝後會取代裝置目前的韌體。",
+          otaNotice: "首次使用 OTA 前，須透過 USB 完整安裝支援 OTA 的版本。舊版僅支援 USB；安裝舊版分割配置後會停用 OTA，必須再次透過 USB 安裝支援 OTA 的版本才能恢復。",
+          legacyWarning: "⚠️ 所選版本僅支援 USB。安裝舊版分割配置後會停用 OTA，必須再次透過 USB 安裝支援 OTA 的版本才能恢復。",
+          otaCapable: "支援 OTA",
+          usbOnly: "僅 USB",
           caption: "六種可切換主題，每種版面都顯示相同的即時 GT7 遙測資料。",
           complete: "✅ 安裝完成",
           next: "接下來：",
@@ -732,6 +743,7 @@
         document.getElementById("connect-button").textContent = text.connect;
         document.getElementById("unsupported-button").textContent = text.unsupported;
         document.getElementById("compatibility-warning").textContent = text.warning;
+        document.getElementById("ota-notice").textContent = text.otaNotice;
         document.getElementById("theme-caption").textContent = text.caption;
 
         const quickStart = document.getElementById("quick-start");
@@ -812,7 +824,9 @@
         const manifestPath = release.manifests[controllerSelect.value];
         installButton.setAttribute("manifest", manifestPath);
         versionLabel.textContent = `${currentLanguage === "zh" ? "版本" : "Version"} ${release.version}`;
-
+        document.getElementById("ota-notice").textContent = release.ota === true
+          ? translations[currentLanguage].otaNotice
+          : translations[currentLanguage].legacyWarning;
       }
 
       function renderVersionDialog() {
@@ -829,7 +843,10 @@
           const label = document.createElement("span");
           label.textContent = `${currentLanguage === "zh" ? "版本" : "Version"} ${item.version}`;
           const status = document.createElement("small");
-          status.textContent = index === 0 ? translations[currentLanguage].latest : "";
+          status.textContent = [
+            index === 0 ? translations[currentLanguage].latest : "",
+            item.ota === true ? translations[currentLanguage].otaCapable : translations[currentLanguage].usbOnly
+          ].filter(Boolean).join(" · ");
           option.append(label, status);
           option.addEventListener("click", () => {
             previewVersion = item.version;
@@ -839,6 +856,11 @@
         });
 
         versionNotes.replaceChildren();
+        if (release.ota !== true) {
+          const warning = document.createElement("li");
+          warning.textContent = translations[currentLanguage].legacyWarning;
+          versionNotes.append(warning);
+        }
         for (const note of release.notes ?? []) {
           const item = document.createElement("li");
           item.textContent = note;

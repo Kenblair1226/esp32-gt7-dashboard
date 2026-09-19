@@ -7,6 +7,11 @@ on:
     paths:
       - "installer/**"
       - ".github/workflows/deploy-pages.yml"
+      - "scripts/stage-published-installer.mjs"
+      - "scripts/validate-installer.mjs"
+      - "scripts/firmware-release.mjs"
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -20,134 +25,40 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.repository == 'Kenblair1226/esp32-gt7-dashboard' && (github.event_name != 'release' || (!github.event.release.prerelease && !github.event.release.draft))
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: Kenblair1226/esp32-gt7-dashboard
     steps:
-      - name: Check out repository
+      - name: Check out the current installer frontend
         uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 
-      - name: Validate committed installer
-        shell: bash
-        run: |
-          node <<'NODE'
-          const { readFile, readdir, stat } = require("node:fs/promises");
-          const { isAbsolute, relative, resolve, sep } = require("node:path");
-
-          const installerRoot = resolve("installer");
-          const indexPath = resolve(installerRoot, "index.html");
-          const manifestPath = resolve(installerRoot, "manifest.json");
-          const releasesPath = resolve(installerRoot, "releases.json");
-
-          async function requireNonEmptyFile(filePath, label) {
-            let details;
-            try {
-              details = await stat(filePath);
-            } catch (error) {
-              if (error.code === "ENOENT") {
-                throw new Error(`${label} is missing: ${relative(process.cwd(), filePath)}`);
-              }
-              throw error;
-            }
-
-            if (!details.isFile()) {
-              throw new Error(`${label} is not a file: ${relative(process.cwd(), filePath)}`);
-            }
-            if (details.size === 0) {
-              throw new Error(`${label} is empty: ${relative(process.cwd(), filePath)}`);
-            }
-          }
-
-          function installerPath(manifestDirectory, manifestPartPath) {
-            if (typeof manifestPartPath !== "string" || manifestPartPath.length === 0) {
-              throw new Error("Every manifest part must have a non-empty string path.");
-            }
-
-            const resolvedPath = resolve(manifestDirectory, manifestPartPath);
-            const relativePath = relative(installerRoot, resolvedPath);
-            if (
-              isAbsolute(relativePath) ||
-              relativePath === ".." ||
-              relativePath.startsWith(`..${sep}`)
-            ) {
-              throw new Error(`Manifest binary path resolves outside installer/: ${manifestPartPath}`);
-            }
-            return resolvedPath;
-          }
-
-          async function main() {
-            await requireNonEmptyFile(indexPath, "Installer index");
-            await requireNonEmptyFile(manifestPath, "Installer manifest");
-            await requireNonEmptyFile(releasesPath, "Installer release index");
-
-            const rootManifestNames = (await readdir(installerRoot)).filter((name) =>
-              /^manifest(?:-[a-z0-9-]+)?\.json$/i.test(name),
-            );
-            const releaseIndex = JSON.parse(await readFile(releasesPath, "utf8"));
-            const releases = Array.isArray(releaseIndex.versions) ? releaseIndex.versions : [];
-
-            if (releases.length === 0 || releases.length > 10) {
-              throw new Error("installer/releases.json must contain between 1 and 10 versions.");
-            }
-
-            const manifestPaths = [
-              ...rootManifestNames.map((name) => resolve(installerRoot, name)),
-              ...releases.flatMap((release) =>
-                Object.values(release.manifests ?? {}).map((path) => resolve(installerRoot, path)),
-              ),
-            ];
-            let binaryCount = 0;
-
-            for (const currentManifestPath of manifestPaths) {
-              const manifestName = relative(installerRoot, currentManifestPath);
-              await requireNonEmptyFile(currentManifestPath, `Installer manifest "${manifestName}"`);
-
-              let manifest;
-              try {
-                manifest = JSON.parse(await readFile(currentManifestPath, "utf8"));
-              } catch (error) {
-                throw new Error(`Unable to parse installer/${manifestName}: ${error.message}`);
-              }
-
-              const parts = Array.isArray(manifest.builds)
-                ? manifest.builds.flatMap((build) =>
-                    Array.isArray(build?.parts) ? build.parts : [],
-                  )
-                : [];
-
-              if (parts.length === 0) {
-                throw new Error(`installer/${manifestName} does not reference any binaries.`);
-              }
-
-              for (const part of parts) {
-                const binaryPath = installerPath(resolve(currentManifestPath, ".."), part?.path);
-                await requireNonEmptyFile(
-                  binaryPath,
-                  `${manifestName} binary "${part.path}"`,
-                );
-                binaryCount += 1;
-              }
-            }
-
-            console.log(
-              `Validated installer, ${manifestPaths.length} manifests, and ${binaryCount} binary references.`,
-            );
-          }
-
-          main().catch((error) => {
-            console.error(`Installer validation failed: ${error.message}`);
-            process.exit(1);
-          });
-          NODE
+      - name: Stage and validate the current published firmware
+        run: node scripts/stage-published-installer.mjs stage installer .pio/pages-site .pio/pages-release.json
 
       - name: Upload installer site
         uses: actions/upload-pages-artifact@v4
         with:
-          path: installer
+          path: .pio/pages-site
+
+      - name: Recheck the stable release immediately before deployment
+        run: node scripts/stage-published-installer.mjs check-current .pio/pages-release.json
 
       - name: Deploy to GitHub Pages
         id: deployment

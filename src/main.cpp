@@ -36,6 +36,7 @@ FullLoopbackStream incomingStream;
 #if INCLUDE_GT7_WIFI
   #include <WiFi.h>
   #include <WiFiManager.h>
+  #include <FirmwareUpdate.h>
 
   // WiFiManager captive portal shown only when no saved Wi-Fi can be used.
   static constexpr const char *GT7_SETUP_AP_NAME = "GT7-DASH-SETUP";
@@ -1396,6 +1397,10 @@ void setup()
 	// 關閉設定用的 SoftAP，只保留 STA
     WiFi.softAPdisconnect(true);
 	WiFi.mode(WIFI_STA);
+	if (!FirmwareUpdate::begin())
+	{
+		Serial.println("Firmware updates unavailable; see Device Settings.");
+	}
 #endif
 
 delay(1000);
@@ -1508,16 +1513,53 @@ void loop() {
 #endif
 	shCustomProtocol.loop();
 #if INCLUDE_GT7_WIFI
-    if (shCustomProtocol.takeWifiResetRequest())
-    {
-        Serial.println("Clearing saved Wi-Fi settings...");
+	const bool gameActive = shCustomProtocol.isFirmwareUpdateGameActive();
+	FirmwareUpdate::poll(gameActive);
+	switch (shCustomProtocol.takeFirmwareUpdateAction())
+	{
+		case FirmwareUpdate::Action::Check:
+			FirmwareUpdate::requestCheck(gameActive);
+			break;
+		case FirmwareUpdate::Action::Install:
+			FirmwareUpdate::requestInstall(gameActive);
+			break;
+		case FirmwareUpdate::Action::Cancel:
+			FirmwareUpdate::requestCancel();
+			break;
+		case FirmwareUpdate::Action::None:
+			break;
+	}
 
-        WiFiManager wifiManager;
-        wifiManager.resetSettings();
+	if (FirmwareUpdate::snapshot().state == FirmwareUpdate::State::ReadyToRestart)
+	{
+		if (!shCustomProtocol.prepareFirmwareUpdateRestart())
+		{
+			FirmwareUpdate::rejectActivation(FirmwareUpdate::Error::PreferencesFailed);
+		}
+		else if (FirmwareUpdate::activate(gameActive))
+		{
+			shCustomProtocol.setFirmwareUpdateStatus(FirmwareUpdate::snapshot());
+			delay(200);
+			ESP.restart();
+		}
+	}
+	shCustomProtocol.setFirmwareUpdateStatus(FirmwareUpdate::snapshot());
 
-        delay(1000);
-        ESP.restart();
-    }
+	if (shCustomProtocol.takeWifiResetRequest())
+	{
+		if (FirmwareUpdate::isBusy(FirmwareUpdate::snapshot().state))
+		{
+			Serial.println("Wi-Fi reset rejected while a firmware update is active.");
+		}
+		else
+		{
+			Serial.println("Clearing saved Wi-Fi settings...");
+			WiFiManager wifiManager;
+			wifiManager.resetSettings();
+			delay(1000);
+			ESP.restart();
+		}
+	}
 #endif
 	// Wait for data
 	if (FlowSerialAvailable() > 0) {

@@ -1,4 +1,4 @@
-# ESP32 GT7 Dashboard ([線上安裝](https://caa1211.github.io/esp32-gt7-dashboard/?lang=zh-TW))
+# ESP32 GT7 Dashboard ([線上安裝](https://kenblair1226.github.io/esp32-gt7-dashboard/?lang=zh-TW))
 
 [English](README.md) | [繁體中文](README.zh-TW.md)
 
@@ -56,6 +56,7 @@
 - 🌙 手動熄屏
 - 😴 自動休眠與自動喚醒
 - 💾 自動儲存 Wi-Fi 設定
+- 手動確認後，透過 GitHub Releases 進行 OTA 韌體更新
 - 🎯 專為 Gran Turismo 7 設計
 
 ---
@@ -106,10 +107,37 @@
 5. 等待安裝完成。
 6. 拔除 USB 並重新上電。
 
-👉 **https://caa1211.github.io/esp32-gt7-dashboard/?lang=zh-TW**
+👉 **https://kenblair1226.github.io/esp32-gt7-dashboard/?lang=zh-TW**
 
 網頁安裝程式支援本專案所設定的傳統 ESP32 目標。韌體維護者可參閱
 [docs/RELEASING.md](docs/RELEASING.md)，了解本機編譯、二進位檔案放置、燒錄位址及發佈流程。
+
+### OTA 韌體更新
+
+**既有裝置需要先透過 USB 升級一次。** 請使用 Web Installer 安裝已正式發佈、
+支援 OTA 的版本，並一併更新分割區表。只將 application image 寫入舊分割區，
+無法啟用 OTA。安裝程式會標示僅支援 USB 的舊版本；重新安裝舊版會再次停用 OTA。
+
+1. 連上可存取網際網路的 Wi-Fi，並離開 GT7 的賽道。
+2. 點一下螢幕，開啟 **DEVICE SETTINGS > FIRMWARE UPDATE**。
+3. 檢查更新並確認可用版本。
+4. 確認安裝，保持供電直到裝置重新啟動。
+
+裝置會自動選擇正確的 ILI9341 或 ST7789 image，只提供
+[Kenblair1226/esp32-gt7-dashboard](https://github.com/Kenblair1226/esp32-gt7-dashboard/releases)
+中較新的正式版本。草稿、預先發行版及降版不會提供；開機時不會自動檢查，
+也不會在未確認的情況下安裝。
+
+OTA 會保留 Wi-Fi、主題、亮度及觸控方向。下載使用已驗證的 HTTPS 與 SHA-256，
+若下載中斷或驗證失敗，仍會保留目前的開機韌體。啟用新韌體前可取消更新；
+若重新進入賽道，也會安全停止尚未啟用的更新。更新期間螢幕不會自動休眠。
+
+只有 OTA 需要網際網路及 TLS 所需的時間同步，一般 GT7 遙測不需要外網。
+若新韌體無法開機，請透過 USB 重新安裝；此版本未啟用開機失敗自動回復。
+USB 安裝時選擇 **erase** 會清除 Wi-Fi 與偏好設定；未清除的升級方式會保留 NVS。
+
+此分支需要先啟用 GitHub Pages 並正式發佈 OTA 版本，才會提供上述下載。
+詳細流程請參閱[發佈與復原指南](docs/RELEASING.md)。
 
 ---
 
@@ -169,6 +197,7 @@ http://192.168.4.1
 - 選擇並儲存 Classic、GT3、Retro、Radar、Mono、Pocket 或 Endurance 儀表主題。
 - 進入 **DEVICE SETTINGS**，以 10% 級距調整 20%～100% 的亮度。
 - 從 Device Settings 透過獨立確認畫面重設已儲存的 Wi-Fi。
+- 不在賽道上時，從 Device Settings 檢查並確認安裝韌體更新。
 
 亮度預設為 80%，調整後會儲存，重新開機或喚醒時會恢復；自動休眠仍會完全關閉背光。
 
@@ -201,7 +230,7 @@ http://192.168.4.1
 - [x] ABS 指示燈
 - [x] 自動休眠
 - [x] 手動熄屏
-- [ ] OTA 韌體更新
+- [x] OTA 韌體更新
 - [ ] 支援更多顯示器
 - [ ] 自訂主題
 - [ ] 多種儀表版面
@@ -219,7 +248,7 @@ http://192.168.4.1
 下載原始碼後，使用 PlatformIO 同時編譯兩種顯示控制器版本：
 
 ```bash
-git clone https://github.com/caa1211/esp32-gt7-dashboard.git
+git clone https://github.com/Kenblair1226/esp32-gt7-dashboard.git
 cd esp32-gt7-dashboard
 pio run -e esp32 -e esp32-st7789
 ```
@@ -233,13 +262,20 @@ pio run -e esp32 -e esp32-st7789
 `installer/firmware/`，並驗證兩份 installer manifest，請執行：
 
 請先在 `installer/release-notes.json` 加入新版本的簡短差異說明。發布指令會將
-兩種螢幕版本封存給 Installer 使用，並自動只保留最近五個版本。
+兩種螢幕版本封存給 Installer 使用，並自動只保留最近十個版本。
 
 ```bash
-npm run publish:firmware -- 1.2.5
+npm run publish:firmware -- 1.9.0
 ```
 
-請將 `1.2.5` 替換成這次要發佈的版本號。
+請將 `1.9.0` 替換成這次要發佈的版本號。工具也會將驗證過的 OTA 與 USB
+發佈檔案寫入 `.pio/release/`。每份 application image 必須小於或等於雙槽
+分割區的 1,966,080 位元組上限。
+
+提交同步後的版本與發佈說明，再推送相符的 `vX.Y.Z` tag，GitHub Actions
+便會編譯兩種螢幕版本並建立 **草稿**。請以草稿中的實際檔案完成實機驗收後，
+再手動正式發佈；Pages 會部署同一組韌體。僅修改安裝網頁時，不會以原始碼
+儲存庫內較舊的二進位檔案取代已驗收的正式韌體。
 
 ---
 

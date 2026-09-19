@@ -1,5 +1,5 @@
 
-# ESP32 GT7 Dashboard ([Installer](https://caa1211.github.io/esp32-gt7-dashboard/?lang=en))
+# ESP32 GT7 Dashboard ([Installer](https://kenblair1226.github.io/esp32-gt7-dashboard/?lang=en))
 
 [English](README.md) | [繁體中文](README.zh-TW.md)
 
@@ -55,6 +55,7 @@ Simply connect your ESP32 to the same Wi-Fi network as your PS5 and enjoy real-t
 - 🌙 Manual screen off
 - 😴 Automatic sleep and automatic wake
 - 💾 Wi-Fi credentials stored in flash memory
+- User-confirmed OTA updates from GitHub Releases
 - 🎯 Designed specifically for Gran Turismo 7
 
 ---
@@ -105,11 +106,43 @@ No development tools are required.
 5. Wait for the installation to complete.
 6. Disconnect the USB cable and power the device.
 
-👉 **https://caa1211.github.io/esp32-gt7-dashboard/?lang=en**
+👉 **https://kenblair1226.github.io/esp32-gt7-dashboard/?lang=en**
 
 The browser installer supports the classic ESP32 target configured by this repository.
 Firmware maintainers can find the local build, binary staging, flash-offset, and publishing
 procedure in [docs/RELEASING.md](docs/RELEASING.md).
+
+### Firmware Updates (OTA)
+
+**Existing installations need one USB upgrade first.** Install a published OTA-capable
+release with the Web Installer, including its new partition table. Flashing only the
+application onto the old layout does not enable OTA. The installer identifies older,
+USB-only versions; reinstalling one of those versions disables OTA again.
+
+1. Connect to Wi-Fi with internet access and leave the on-track GT7 session.
+2. Tap the display, then open **DEVICE SETTINGS > FIRMWARE UPDATE**.
+3. Check for an update and review the available version.
+4. Confirm installation and keep power connected until the device restarts.
+
+The device selects the correct ILI9341 or ST7789 image automatically. It only offers
+newer stable releases from
+[Kenblair1226/esp32-gt7-dashboard](https://github.com/Kenblair1226/esp32-gt7-dashboard/releases).
+Drafts, prereleases, and downgrades are not offered. There are no automatic startup
+checks or unattended installations.
+
+OTA preserves Wi-Fi, theme, brightness, and touch orientation. Downloads use verified
+HTTPS and SHA-256, and an interrupted or rejected download leaves the current firmware
+selected. Updates can be cancelled before activation and are stopped if on-track
+gameplay resumes. The display stays awake during an update.
+
+Internet access, including time synchronization for TLS, is required only for OTA;
+normal GT7 telemetry still works without internet. If newly installed firmware cannot
+boot, reinstall over USB: automatic boot-failure rollback is not enabled. The USB
+installer's **erase** option clears saved Wi-Fi and preferences; a non-erasing migration
+retains the NVS partition.
+
+The fork's Pages site must be enabled and an OTA release published before these
+downloads are available. See the [release and recovery guide](docs/RELEASING.md).
 
 ---
 
@@ -176,6 +209,7 @@ saved, repeat the same procedure from the waiting screen to replace it.
 - Select and save the Classic, GT3, Retro, Radar, Mono, Pocket, or Endurance dashboard theme.
 - Open **DEVICE SETTINGS** to adjust brightness from 20% to 100% in 10% steps.
 - Reset saved Wi-Fi from Device Settings through a separate confirmation screen.
+- Check for and confirm firmware updates from Device Settings when not on track.
 
 Brightness defaults to 80%, is saved after adjustment, and is restored after reboot or wake. Automatic sleep still turns the backlight fully off.
 
@@ -208,7 +242,7 @@ To reduce power consumption and extend display life:
 - [x] ABS indicator
 - [x] Automatic sleep mode
 - [x] Manual screen off
-- [ ] OTA firmware update
+- [x] OTA firmware update
 - [ ] Additional display support
 - [ ] Custom themes
 - [ ] Multiple dashboard layouts
@@ -226,7 +260,7 @@ This project is built using:
 Clone the repository, then build both display-controller variants with PlatformIO:
 
 ```bash
-git clone https://github.com/caa1211/esp32-gt7-dashboard.git
+git clone https://github.com/Kenblair1226/esp32-gt7-dashboard.git
 cd esp32-gt7-dashboard
 pio run -e esp32 -e esp32-st7789
 ```
@@ -241,14 +275,22 @@ For a release build that also synchronizes the version, copies both images into
 
 First add a short change summary for the new version to
 `installer/release-notes.json`. The publish command archives both display
-variants for the installer and automatically keeps only the five most recent
+variants for the installer and automatically keeps only the ten most recent
 versions.
 
 ```bash
-npm run publish:firmware -- 1.2.5
+npm run publish:firmware -- 1.9.0
 ```
 
-Replace `1.2.5` with the version being released.
+Replace `1.9.0` with the version being released. The helper also writes verified OTA
+and USB release assets to `.pio/release/`. Each application must fit the dual-slot
+layout's 1,966,080-byte limit.
+
+For GitHub publication, push a matching `vX.Y.Z` tag after committing the synchronized
+version and release notes. GitHub Actions builds both targets and creates a **draft**.
+Publish it only after accepting those exact binaries on hardware; Pages then deploys
+the same firmware. Installer-only changes do not replace accepted release firmware
+with older committed binaries.
 
 ---
 

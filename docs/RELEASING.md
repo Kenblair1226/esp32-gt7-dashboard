@@ -1,190 +1,279 @@
-# Publishing firmware for the Web Installer
+# Releasing firmware for OTA and the Web Installer
 
-The GitHub Pages workflow publishes only the contents of `installer/`. It does not install
-PlatformIO and does not compile the firmware. Build and test every release locally before
-committing its binary images.
+Firmware releases come from
+[`Kenblair1226/esp32-gt7-dashboard`](https://github.com/Kenblair1226/esp32-gt7-dashboard/releases).
+GitHub Actions builds both display-controller variants at a version tag and creates a
+**draft** release. A maintainer accepts those exact binaries on hardware and publishes
+the draft manually. Devices and the Web Installer then use the same published bytes.
 
-`VERSION` is the only manually controlled version source. The publish helper synchronizes
-that value into the generated C++ header and both ESP Web Tools manifests.
+Pages deployment does not rebuild firmware. Installer-only changes on `main` reuse
+accepted release firmware instead of replacing it with older committed binaries.
+Local builds and packaging remain available for development.
 
-## Flash layout
+## Version and hardware identity
 
-The project uses the `esp32` and `esp32-st7789` PlatformIO environments, the classic
-`esp32doit-devkit-v1` board, Arduino framework, and `huge_app.csv` partition table.
-PlatformIO's resolved upload metadata defines this flash layout:
+`VERSION` is the manually controlled version source. The publishing helper generates
+`include/version.h` and synchronizes the installer manifests from it. Use canonical
+numeric `major.minor.patch` versions without leading zeroes; each component must fit an
+unsigned 32-bit integer and the complete version must fit 32 characters. The matching
+tag is `vX.Y.Z`.
 
-| Offset | Installer file | Local source |
+Each application embeds its version, product, display variant, and
+`esp32-4mb-min-spiffs-v1` layout identity. Packaging checks that identity against the
+actual image, not only the name of the file. CI rejects a tag that disagrees with the
+version/header/release notes before running the publisher. Do not reuse an existing
+published tag or overwrite a published asset.
+
+OTA offers only strictly newer stable versions. It does not offer a draft, prerelease,
+same-version reinstall, downgrade, or a manually selected panel. The compiled
+`DISPLAY_PANEL_ST7789` flag determines which image the device accepts.
+
+## Flash layout and capacity
+
+Both `esp32` (ILI9341) and `esp32-st7789` use the classic ESP32 target, Arduino framework,
+`espressif32@6.9.0`, and the framework's `min_spiffs.csv`. Each of the two application
+slots is **1,966,080 bytes (`0x1E0000`)**. Release packaging must reject an application
+that does not fit either slot; do not remove themes or change the layout silently to
+make an oversized release pass.
+
+| Partition | Offset | Size |
 | --- | --- | --- |
-| `0x1000` | `installer/firmware/bootloader.bin` | `.pio/build/esp32/bootloader.bin` |
-| `0x8000` | `installer/firmware/partitions.bin` | `.pio/build/esp32/partitions.bin` |
-| `0xE000` | `installer/firmware/boot_app0.bin` | PlatformIO's Arduino ESP32 package, `tools/partitions/boot_app0.bin` |
-| `0x10000` | `installer/firmware/firmware-ili9341.bin` | `.pio/build/esp32/firmware.bin` |
-| `0x10000` | `installer/firmware/firmware-st7789.bin` | `.pio/build/esp32-st7789/firmware.bin` |
+| NVS | `0x9000` | `0x5000` |
+| OTA data | `0xE000` | `0x2000` |
+| Application 0 | `0x10000` | `0x1E0000` |
+| Application 1 | `0x1F0000` | `0x1E0000` |
+| SPIFFS | `0x3D0000` | `0x20000` |
+| Core dump | `0x3F0000` | `0x10000` |
 
-These offsets are not arbitrary: the ESP32 PlatformIO integration places the bootloader at
-`0x1000`, the partition table at `0x8000`, the OTA data initializer at `0xE000`, and the
-application at `0x10000`. The selected `huge_app.csv` confirms that the OTA data partition
-starts at `0xE000` and the first application partition starts at `0x10000`.
+The USB bundle uses these offsets:
 
-Re-check PlatformIO's verbose upload command or resolved project metadata if the board,
-framework platform, or partition table changes. Update both this document and
-`installer/manifest.json` and `installer/manifest-st7789.json` if the flash map changes.
+| Offset | File | Build source |
+| --- | --- | --- |
+| `0x1000` | `bootloader.bin` | `.pio/build/esp32/bootloader.bin` |
+| `0x8000` | `partitions.bin` | `.pio/build/esp32/partitions.bin` |
+| `0xE000` | `boot_app0.bin` | Framework `tools/partitions/boot_app0.bin` |
+| `0x10000` | `firmware-ili9341.bin` | `.pio/build/esp32/firmware.bin` |
+| `0x10000` | `firmware-st7789.bin` | `.pio/build/esp32-st7789/firmware.bin` |
 
-## Build and test locally
+Choose one application image, not both. Both builds must have identical shared boot
+files and partition tables. Revisit all packaging, compatibility checks, manifests,
+and migration instructions together if the platform or flash layout changes.
 
-1. Install PlatformIO locally and check out the revision to release.
-2. Choose a release version and run the single local publishing command. Supply a numeric
-   `major.minor.patch` version:
+## One-time migration and USB recovery
 
-   ```bash
-   node scripts/publish-firmware.mjs 1.2.3
+Older firmware uses `huge_app.csv`, which has only one application slot. Such an
+installation cannot receive an ordinary OTA update: it needs one complete USB
+installation of an OTA-capable release.
+
+Use the Web Installer after that release is published, or extract the release's
+`usb-installer.zip` and flash its complete controller-specific manifest with ESP Web
+Tools or esptool. The bundle includes the bootloader, partition table, OTA-data
+initializer, and both application variants. Installing only `firmware-*.bin` onto an
+old layout is insufficient.
+
+The NVS offset and size are unchanged, so flashing without an erase preserves saved
+Wi-Fi, theme, brightness, and touch orientation. Choosing the installer's erase option
+clears those settings; complete Wi-Fi setup again afterward.
+
+Archived USB-only releases retain their original partition images. The installer warns
+when one is selected because installing it removes the second OTA slot. Another USB
+migration is needed before updating wirelessly again.
+
+An interrupted or rejected OTA transfer leaves the existing boot selection intact.
+This is not boot-failure rollback: the stock bootloader is not configured here to
+automatically recover from a newly installed application that crashes on startup.
+Recover a bad boot by flashing a known-good complete USB release.
+
+## Prepare and build locally
+
+1. Add short, nonempty release notes for the chosen version to
+   `installer/release-notes.json`.
+2. Synchronize and build both variants:
+
+   ```powershell
+   npm run publish:firmware -- 1.9.0
    ```
 
-   The script validates the version; updates `VERSION`, `include/version.h`, and both
-   installer manifests; then builds the `esp32` ILI9341 and `esp32-st7789` environments.
-   After successful builds it validates and copies the three shared boot files plus both
-   application images into `installer/firmware/`, verifies every manifest binary, and
-   prints sizes, SHA-256 hashes, and a release summary.
+   Replace `1.9.0` with the intended new version. Omitting the version reads `VERSION`.
+   The helper builds both targets, checks the actual images/partitions, stages the local
+   installer, archives up to ten versions, and writes flat release files under
+   `.pio/release/`.
+3. For version preparation only, without builds or release assets:
 
-   Running the command without a version preserves the existing behavior by reading the
-   current value from `VERSION`:
-
-   ```bash
-   node scripts/publish-firmware.mjs
+   ```powershell
+   npm run publish:firmware -- 1.9.0 --skip-build
    ```
 
-   To synchronize the version files without building or copying binaries, use:
+   This only synchronizes version files. It does **not** make old binaries into a
+   release. Do not publish sync-only installer manifests with mismatched binaries.
+   CI does not use this option.
+4. To build without staging or changing installer/version files:
 
-   ```bash
-   node scripts/publish-firmware.mjs 1.2.3 --skip-build
+   ```powershell
+   pio run -e esp32 -e esp32-st7789
    ```
 
-   Set `PLATFORMIO_CMD` if PlatformIO is not on `PATH`, or `PLATFORMIO_ENV` if a future
-   release uses another environment. The helper never commits, tags, pushes, creates a
-   GitHub Release, or deploys Pages.
+Use `PLATFORMIO_CMD` when PlatformIO is not on `PATH`, `PLATFORMIO_CORE_DIR` for a custom
+core installation, and the existing `PLATFORMIO_ENV`/`PLATFORMIO_ST7789_ENV` overrides
+only for equivalent compatible targets. A custom environment still has to pass all
+panel, partition, image, and size checks.
 
-   To build without staging installer files, run PlatformIO directly:
+The local publisher never commits, tags, pushes, creates a GitHub Release, or deploys
+Pages. Do not commit `.pio/`. CI-generated release binaries do not need to be committed
+to the repository.
 
-   ```bash
-   pio run -e esp32
-   ```
+## Release assets
 
-3. Upload it to the target hardware and test the dashboard:
+The flat package contains:
 
-   ```bash
-   pio run -e esp32 -t upload
-   ```
+| Asset | Purpose |
+| --- | --- |
+| `ota-manifest.json` | Bounded, versioned metadata with per-panel size and SHA-256 |
+| `firmware-ili9341.bin`, `firmware-st7789.bin` | Application-only OTA and USB images |
+| `bootloader.bin`, `partitions.bin`, `boot_app0.bin` | Complete USB installation/migration |
+| `manifest-ili9341.json`, `manifest-st7789.json` | ESP Web Tools manifests with USB offsets |
+| `release.json` | Version, release notes, OTA capability, and manifest names |
+| `checksums.sha256` | SHA-256 checksums of the packaged files |
+| `usb-installer.zip` | CI-created archive of the nine payload files above, excluding checksums |
 
-4. Confirm that the display, touch input, Wi-Fi setup, and GT7 telemetry work as expected.
+CI creates the ZIP from already validated files and then refreshes the external
+checksums to include the ZIP. There is no second compilation for USB.
 
-## Stage the installer binaries
+The OTA manifest declares schema version `1`, product `esp32-gt7-dashboard`, chip family
+`ESP32`, layout `esp32-4mb-min-spiffs-v1`, the numeric version, matching release tag, and
+both panel assets. Filenames are fixed; arbitrary URLs are not accepted. The device
+fetches a small manifest through `releases/latest/download/ota-manifest.json`, then
+downloads the selected application from its immutable tag-specific URL. A changing
+`latest` release therefore cannot silently mix metadata and application versions.
 
-Create `installer/firmware/` if necessary, then copy the five real binary files listed in
-the flash-layout table into it. The two application images come from their respective
-PlatformIO environment build directories. Locate `boot_app0.bin` in the installed Arduino
-ESP32 framework package reported by PlatformIO; on typical systems it is under:
+Useful local validation commands:
 
-```text
-<PlatformIO home>/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin
+```powershell
+node scripts\firmware-release.mjs verify-tag v1.9.0
+node scripts\firmware-release.mjs validate .pio\release 1.9.0
+npm run test:release
 ```
 
-Do not commit `.pio/`. Do not add empty or placeholder binary files. Before committing,
-verify that all five installer binaries exist and have non-zero sizes:
+Host regressions use Node's built-in runner and `g++` with AddressSanitizer and
+UndefinedBehaviorSanitizer. Ubuntu CI uses its existing compiler; Windows defaults
+to the checkout's WSL toolchain, or `CXX` can name a sanitizer-capable compiler.
+Missing compilers fail explicitly. The tests include the reviewed MIT-licensed cJSON
+1.7.17 source, so they do not download dependencies or require a prebuilt firmware SDK.
 
-```bash
-git status --short
-git check-ignore -v installer/firmware/firmware-ili9341.bin
-git check-ignore -v installer/firmware/firmware-st7789.bin
+## Publish a release
+
+1. Merge the accepted source/workflow changes into `main`. Commit the intended
+   `VERSION`, generated version header, and release notes. Never commit version-only
+   installer changes as though corresponding binaries had been rebuilt.
+2. Create and push an annotated tag on that accepted commit:
+
+   ```powershell
+   git tag -a v1.9.0 -m "Release 1.9.0"
+   git push origin v1.9.0
+   ```
+
+   Pushing a branch does not push a newly created tag. The tag and version must agree.
+3. The firmware-release workflow builds both targets, validates all payloads, uploads
+   an Actions artifact, and creates a GitHub **draft** release. A failed build or package
+   does not create an installable release. Published releases cannot be overwritten by
+   rerunning the workflow. A partial draft resumes only when its existing assets match
+   byte-for-byte. If a rebuild produces different bytes, resolve that unpublished draft
+   explicitly; the workflow will not replace its assets silently.
+4. Download that draft's exact assets. Flash the complete USB bundle on each supported
+   panel and perform the hardware acceptance below; do not substitute a local rebuild
+   with the same version number.
+5. Publish the accepted draft manually as a stable release in GitHub. The public
+   `latest` channel must identify the intended release.
+6. The Pages workflow stages and validates the accepted release files without rebuilding.
+   Confirm its deployment completes and that the selected version and application
+   hashes match the published release.
+
+Publishing makes the OTA assets available before the subsequent Pages deployment
+finishes. If Pages fails, fix and rerun that deployment rather than modifying accepted
+firmware assets in place.
+
+## Pages behavior and repository settings
+
+Set **Repository > Settings > Pages > Build and deployment > Source** to
+**GitHub Actions**. Allow Actions to build the public repository and create draft
+releases. The build jobs need read access; release publication needs `contents: write`,
+while Pages uses its separate Pages/id-token permissions. No GitHub token is embedded
+in firmware or release payloads.
+
+If the `github-pages` environment restricts deployment branches or tags, allow `main`
+and accepted `v*` tags: a release-publication event runs with a tag ref even when its
+installer frontend is checked out from `main`.
+
+The intended site is
+<https://kenblair1226.github.io/esp32-gt7-dashboard/>. Enabling these workflows does not
+mean the site or an OTA release has already been deployed.
+
+Before the first stable OTA release, Pages can deploy the committed legacy installer.
+Afterward, the published release assets are the firmware source of truth. Installer
+frontend changes on `main` and manual deployments reuse the current stable firmware.
+Missing assets, malformed metadata, download failures, and hash mismatches must fail
+deployment rather than fall back to old binaries.
+
+The version index retains up to ten selectable stable/legacy versions, excludes drafts
+and prereleases, and merges accepted GitHub release history with existing legacy
+archives. A late workflow for an older release must not change which firmware is
+advertised as current. Root `manifest.json` remains the ILI9341 alias and
+`manifest-st7789.json` remains the ST7789 alias.
+
+To stage a local, read-only preview using GitHub CLI authentication:
+
+```powershell
+node scripts\stage-published-installer.mjs stage installer .pio\pages-preview .pio\pages-preview-state.json
+node scripts\stage-published-installer.mjs check-current .pio\pages-preview-state.json
 ```
 
-The `git check-ignore` commands should produce no output. Review the files that will be
-committed, then commit the five binaries together with both manifest version changes.
+Both output paths must be fresh. These commands download and validate release assets
+but do not deploy Pages or modify releases. `GH_REPO` defaults to this fork; automation
+uses `GH_TOKEN`. The identity file stays outside the served directory.
 
-## Verify the installer
+## Device behavior and troubleshooting
 
-1. Serve `installer/` from a local HTTP server or push the tested binaries and allow the
-   GitHub Pages workflow to deploy them. Web Serial requires a secure context; the deployed
-   HTTPS Pages site is the most representative test.
-2. Open the installer in Chrome, Edge, or another desktop browser with Web Serial support.
-3. Connect a test ESP32 using a data-capable USB cable and close any serial monitor.
-4. Select the correct display controller, select **Install firmware**, choose the correct
-   serial port, and complete the flash.
-5. Power-cycle the device and repeat the functional checks above.
-6. In repository **Settings > Pages**, ensure the source is set to **GitHub Actions**. Confirm
-   that the deployment succeeded and that the public installer loads both manifests and all
-   five binary URLs without 404 errors.
+Use **DEVICE SETTINGS > FIRMWARE UPDATE** while not on track. Checking never installs
+an image; installation requires confirmation. There are no automatic startup checks,
+scheduled checks, or unattended updates. The updater keeps the screen awake, supports
+cancellation before activation, and cancels if gameplay resumes before activation.
 
-The Pages workflow is intentionally path-filtered and uploads only `installer/`; source code,
-documentation, `.pio/`, and local build tooling are not included in the published artifact.
+The device validates HTTPS certificates/hostnames, permits only expected GitHub HTTPS
+redirects, and requires a valid clock. SHA-256 and image identity/size checks protect
+against corrupt, stale, or wrong-panel content. Authenticity relies on verified HTTPS
+and control of the selected GitHub repository; this is not an independent firmware
+signature, secure-boot, or eFuse policy.
 
-## Release and GitHub Pages deployment checklist
+| Problem | Action |
+| --- | --- |
+| USB upgrade required | Install the complete dual-slot USB bundle, not only the app. |
+| Wi-Fi, clock, or secure connection unavailable | Restore internet/time-server access, then retry. Do not disable TLS verification. |
+| No compatible release available | Publish a valid stable release with all expected assets. Drafts remain invisible to devices. |
+| Size, image, identity, or hash failure | Keep the current firmware; correct the package and publish a new version. |
+| Update cancelled when driving resumes | Leave the on-track session and check again. |
+| Preferences cannot be saved | Resolve the storage issue before restarting into another image. |
+| New firmware cannot boot | Restore a known-good complete release over USB. |
 
-Use this sequence for every public firmware release:
+Normal local GT7 telemetry does not need internet. TLS trust roots and redirect-host
+policy are maintained in the firmware service; if GitHub changes its trust chain, update
+those roots in a release rather than adding an insecure fallback.
 
-1. Publish the firmware locally with the intended numeric version:
+## Hardware acceptance
 
-   ```bash
-   npm run publish:firmware -- 1.2.3
-   ```
+For both ILI9341 and ST7789, exercise fresh boot, Wi-Fi setup, PS5 discovery, telemetry,
+every theme, brightness, touch calibration, Settings Back/reset confirmation, sleep and
+wake, and repeated checks without heap degradation.
 
-   This runs `scripts/publish-firmware.mjs`; it synchronizes the version, builds with the
-   local PlatformIO installation, copies the required binaries into `installer/firmware/`,
-   and validates the installer files.
-2. Flash and test the generated firmware on a physical ESP32-2432S028.
-3. Serve the local installer without caching:
+Migrate an old single-slot installation over USB, then install two successive OTA
+versions to exercise both slots. Confirm the expected panel/version after each restart
+and that Wi-Fi, theme, brightness, and touch rotation survive.
 
-   ```bash
-   http-server installer -p 8080 -c-1
-   ```
+Exercise no-internet/clock/TLS failures, a missing release, HTTP/redirect failures,
+cancel, Wi-Fi interruption, truncated/corrupt/wrong-panel images, oversized images,
+flash-write errors, and power loss before activation. The current boot selection must
+remain intact on rejected or incomplete updates. Check that gameplay, touch cancellation,
+Settings timeout, auto-sleep, and renderer restoration interact correctly.
 
-4. Open <http://localhost:8080> in a Web Serial-compatible desktop browser.
-5. Confirm that the Web Installer can install the locally committed firmware and that the
-   flashed device works correctly.
-6. Review all release changes:
-
-   ```bash
-   git diff
-   git status
-   ```
-
-7. Commit the updated source, version files, manifest, and firmware binaries.
-8. Push or merge the changes into `main`.
-9. GitHub Actions automatically validates and deploys the committed `installer/` directory
-   to GitHub Pages.
-10. Verify <https://caa1211.github.io/esp32-gt7-dashboard/> and perform another installer
-    test from the deployed site.
-11. After the deployed release has been verified, create an annotated Git tag on the
-    accepted release commit. Use the `vX.Y.Z` naming convention and keep the tag version
-    identical to `VERSION`:
-
-    ```bash
-    git tag -a v1.2.3 -m "Release 1.2.3"
-    ```
-
-    If the release commit is not currently checked out, specify it explicitly:
-
-    ```bash
-    git tag -a v1.2.3 <release-commit> -m "Release 1.2.3"
-    ```
-
-12. Push the release tag and verify that it points to the intended commit on GitHub:
-
-    ```bash
-    git push origin v1.2.3
-    git show --no-patch v1.2.3
-    ```
-
-    Pushing the branch does not push a newly created tag automatically. A GitHub Release
-    may optionally be created from this tag, but it is separate from the firmware and
-    GitHub Pages publishing process.
-
-GitHub Actions does **not** install PlatformIO, build firmware, run the local publishing
-script, or generate binaries. It deploys the committed files exactly as they exist under
-`installer/`.
-
-### One-time GitHub Pages setting
-
-Configure the repository once at **Repository > Settings > Pages > Build and deployment >
-Source > GitHub Actions**. The workflow uses the official Pages artifact deployment flow;
-it does not create or maintain a `gh-pages` branch. The contents of `installer/` become the
-site root, so the public URL has no additional `/installer/` segment.
+Keep hardware, real tag-triggered CI, and deployed Pages acceptance explicitly pending
+when the required devices or publishing access are unavailable. A local compiler or
+host test result alone does not establish those outcomes.

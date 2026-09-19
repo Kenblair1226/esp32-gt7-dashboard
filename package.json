@@ -3,6 +3,7 @@
 {
   "scripts": {
     "publish": "node scripts/publish-firmware.mjs",
-    "publish:firmware": "node scripts/publish-firmware.mjs"
+    "publish:firmware": "node scripts/publish-firmware.mjs",
+    "test:release": "node --test scripts/tests/*.test.mjs"
   }
 }
