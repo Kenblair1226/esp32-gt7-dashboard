@@ -30,6 +30,7 @@ public:
 	HttpsDownload &operator=(const HttpsDownload &) = delete;
 
 	bool open(const char *filename, const char *releaseTag, uint32_t maximumBytes);
+	size_t bodyCapacity() const;
 	int read(uint8_t *buffer, size_t capacity);
 
 private:

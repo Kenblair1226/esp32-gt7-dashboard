@@ -55,8 +55,21 @@ function transportTranslationUnit() {
   const service = normalizedSource(join(library, "FirmwareUpdate.cpp"));
   const timeout = transport.match(/^constexpr uint32_t READ_TIMEOUT_MS = [^;\r\n]+;$/m);
   assert(timeout, "Cannot locate production transport idle timeout");
+  const memoryLimits = transport.match(
+    /^constexpr size_t MIN_TLS_HEAP_BYTES = [^;]+;\r?\nconstexpr size_t MIN_TLS_HEAP_BLOCK = [\s\S]+?;/m,
+  );
+  assert(memoryLimits, "Cannot locate production TLS memory limits");
+  const headers = extractFunction(transport, /^\s*bool headers\(\)/, "HttpsDownload::Impl::headers");
+  assert.match(headers, /char line\[MAX_HEADER_LINE\];/);
+  const layout = transport.slice(transport.indexOf("\tOperation &operation;", transport.indexOf("struct HttpsDownload::Impl")));
+  assert.doesNotMatch(layout, /char line\[MAX_HEADER_LINE\]/, "Header scratch must not occupy handshake heap");
   const replacements = {
     READ_TIMEOUT: timeout[0],
+    MEMORY_LIMITS: memoryLimits[0],
+    MEMORY_GUARD: extractFunction(transport, /^bool hasTlsMemory\(\)/, "hasTlsMemory"),
+    TLS_STOP: extractFunction(transport, /^\s*void stop\(\) override/, "VerifiedClient::stop"),
+    DISCOVER: extractFunction(service, /^bool discoverRelease\(/, "discoverRelease"),
+    BODY_CAPACITY: extractFunction(transport, /^size_t HttpsDownload::bodyCapacity\(\) const/, "bodyCapacity"),
     CLOSE: extractFunction(transport, /^\s*void close\(\)/, "HttpsDownload::Impl::close"),
     READ: extractFunction(transport, /^int HttpsDownload::read\(/, "HttpsDownload::read"),
     CONSTRUCTOR: extractFunction(transport, /^HttpsDownload::HttpsDownload\(/, "HttpsDownload constructor"),
@@ -199,7 +212,7 @@ test("embedded OTA policy, real cJSON manifest and transport regressions (ASan +
     compile(["-std=c++17", "-x", "c++", "-", ...(noPie ? ["-no-pie"] : []),
       "-o", transportExecutable], transportTranslationUnit());
     const transportCases = run(transportExecutable, ["--list"]).trim().split(/\r?\n/);
-    assert(transportCases.length >= 17, "All original transport lifecycle regressions must run");
+    assert(transportCases.length >= 24, "Transport lifecycle and TLS memory regressions must run");
     assert.equal(new Set(transportCases).size, transportCases.length);
     // Batch native cases to avoid a WSL/sanitizer startup for every assertion group.
     const transportResults = run(transportExecutable, ["--all"]).trim().split(/\r?\n/);

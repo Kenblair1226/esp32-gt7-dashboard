@@ -2,13 +2,17 @@
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "../FirmwareUpdate.h"
+#include "../FirmwareManifest.h"
 // Expose only test-state access; the production API header is copied unmodified.
 #define private public
 #include "../OtaTransport.h"
@@ -22,9 +26,27 @@ struct Host
 	unsigned drainAttempts = 0;
 	std::function<void()> onDelay;
 	std::vector<std::string> cleanup;
+	std::vector<int> closedDescriptors;
+	size_t freeHeap = 87000;
+	size_t largestBlock = 45044;
+	size_t advertisedCapacity = 535;
+	size_t allocatedManifest = 0;
+	size_t lastAllocation = 0;
+	unsigned downloadDestructions = 0;
+	bool tlsOpen = false;
+	bool failOpen = false;
+	bool failAllocation = false;
+	bool compatibleLayout = true;
+	FirmwareUpdate::Error manifestError = FirmwareUpdate::Error::None;
+	std::string manifestBody = std::string(535, 'x');
 };
 
 Host host;
+constexpr int MALLOC_CAP_8BIT = 1;
+constexpr size_t MBEDTLS_SSL_IN_BUFFER_LEN = 16717;
+constexpr size_t MBEDTLS_SSL_OUT_BUFFER_LEN = 16717;
+size_t heap_caps_get_free_size(int) { return host.freeHeap; }
+size_t heap_caps_get_largest_free_block(int) { return host.largestBlock; }
 
 uint32_t millis() { return host.now; }
 uint32_t pdMS_TO_TICKS(uint32_t milliseconds) { return milliseconds; }
@@ -39,6 +61,8 @@ void vTaskDelay(uint32_t ticks)
 namespace FirmwareUpdate
 {
 // @production:READ_TIMEOUT
+// @production:MEMORY_LIMITS
+// @production:MEMORY_GUARD
 // @production:REMAINING
 // @production:FAIL
 
@@ -51,6 +75,26 @@ bool Operation::checkpoint()
 		return false;
 	return remaining() ? true : fail(Error::TimedOut);
 }
+
+class WiFiClientSecure
+{
+public:
+	struct Context { int socket = -1; } context;
+	Context *sslclient = &context;
+	virtual ~WiFiClientSecure() { stop(); }
+	virtual void stop()
+	{
+		if (sslclient->socket >= 0) host.closedDescriptors.push_back(sslclient->socket);
+		// The pinned SDK's stop_ssl_socket clears the structure to zero.
+		sslclient->socket = 0;
+	}
+};
+
+class VerifiedClient : public WiFiClientSecure
+{
+public:
+	// @production:TLS_STOP
+};
 
 struct FakeClient
 {
@@ -138,11 +182,88 @@ struct HttpsDownload::Impl
 
 // @production:CONSTRUCTOR
 // @production:DESTRUCTOR
+// @production:BODY_CAPACITY
 // @production:READ
+
+struct esp_partition_t {};
+const esp_partition_t *inactivePartition()
+{
+	static const esp_partition_t partition;
+	return host.compatibleLayout ? &partition : nullptr;
+}
+bool synchronizeClock(Operation &operation) { return operation.checkpoint(); }
+void publishState(const Operation &, State) {}
+constexpr size_t TRANSFER_BYTES = 1024;
+
+class ManifestDownload
+{
+public:
+	explicit ManifestDownload(Operation &operation) : operation_(operation) {}
+	~ManifestDownload()
+	{
+		host.tlsOpen = false;
+		++host.downloadDestructions;
+	}
+	bool open(const char *filename, const char *tag, uint32_t maximum)
+	{
+		assert(host.allocatedManifest == 0);
+		assert(std::string(filename) == "ota-manifest.json" && tag == nullptr);
+		assert(maximum == FirmwareUpdateConfig::MAX_MANIFEST_BYTES);
+		if (host.failOpen) return operation_.fail(Error::ConnectionFailed);
+		host.tlsOpen = true;
+		return true;
+	}
+	size_t bodyCapacity() const { return host.advertisedCapacity; }
+	int read(uint8_t *destination, size_t capacity)
+	{
+		assert(host.tlsOpen && host.allocatedManifest != 0);
+		const size_t bytes = std::min(capacity, host.manifestBody.size() - offset_);
+		std::memcpy(destination, host.manifestBody.data() + offset_, bytes);
+		offset_ += bytes;
+		return static_cast<int>(bytes);
+	}
+
+private:
+	Operation &operation_;
+	size_t offset_ = 0;
+};
+
+void *allocateManifest(size_t bytes)
+{
+	assert(host.tlsOpen && host.allocatedManifest == 0);
+	host.lastAllocation = bytes;
+	if (host.failAllocation) return nullptr;
+	void *result = std::malloc(bytes);
+	assert(result);
+	host.allocatedManifest = bytes;
+	return result;
+}
+void freeManifest(void *data)
+{
+	assert(host.allocatedManifest != 0);
+	host.allocatedManifest = 0;
+	std::free(data);
+}
+Error parseManifest(const char *json, size_t size, Release &, bool &newer)
+{
+	assert(!host.tlsOpen && host.downloadDestructions == 1);
+	assert(host.allocatedManifest != 0 && json[size] == '\0');
+	assert(std::string(json, size) == host.manifestBody);
+	newer = host.manifestError == Error::None;
+	return host.manifestError;
+}
+
+#define HttpsDownload ManifestDownload
+#define malloc allocateManifest
+#define free freeManifest
+// @production:DISCOVER
+#undef free
+#undef malloc
+#undef HttpsDownload
 
 struct Fixture
 {
-	Fixture() : operation(1, millis(), 60000), download(operation)
+	Fixture() : operation(1, millis(), READ_TIMEOUT_MS + 60000), download(operation)
 	{
 		download.impl_ = new HttpsDownload::Impl(operation);
 	}
@@ -364,6 +485,100 @@ void boundedRead()
 	assert(tiny[0] == 3 && tiny[1] == 4 && fixture.state().received == 4);
 	assert(fixture.download.read(tiny, sizeof(tiny)) == 0);
 }
+
+void fragmentedTlsMemory()
+{
+	assert(host.largestBlock < 48000 && hasTlsMemory());
+	host.freeHeap = MIN_TLS_HEAP_BYTES - 1;
+	assert(!hasTlsMemory());
+	host.freeHeap = MIN_TLS_HEAP_BYTES;
+	host.largestBlock = MIN_TLS_HEAP_BLOCK - 1;
+	assert(!hasTlsMemory());
+	host.largestBlock = MIN_TLS_HEAP_BLOCK;
+	assert(hasTlsMemory());
+}
+
+void exactBodyCapacity()
+{
+	Fixture fixture;
+	fixture.state().length = 535;
+	fixture.state().maximum = FirmwareUpdateConfig::MAX_MANIFEST_BYTES;
+	assert(fixture.download.bodyCapacity() == 535);
+	fixture.state().hasLength = false;
+	assert(fixture.download.bodyCapacity() == FirmwareUpdateConfig::MAX_MANIFEST_BYTES);
+}
+
+void manifestAllocationLifetime()
+{
+	Operation operation(1, millis(), 60000);
+	Release release;
+	bool newer = false;
+	assert(discoverRelease(operation, release, newer));
+	assert(newer && host.lastAllocation == 536);
+	assert(host.allocatedManifest == 0 && !host.tlsOpen);
+	assert(host.downloadDestructions == 1);
+}
+
+void manifestUnknownLength()
+{
+	host.advertisedCapacity = FirmwareUpdateConfig::MAX_MANIFEST_BYTES;
+	Operation operation(1, millis(), 60000);
+	Release release;
+	bool newer = false;
+	assert(discoverRelease(operation, release, newer));
+	assert(host.lastAllocation == FirmwareUpdateConfig::MAX_MANIFEST_BYTES + 1);
+	assert(host.allocatedManifest == 0 && !host.tlsOpen);
+}
+
+void manifestFailureCleanup()
+{
+	for (int scenario = 0; scenario < 6; ++scenario)
+	{
+		host = Host{};
+		Error expected = Error::None;
+		switch (scenario)
+		{
+		case 0: host.failOpen = true; expected = Error::ConnectionFailed; break;
+		case 1: host.failAllocation = true; expected = Error::OutOfMemory; break;
+		case 2: host.advertisedCapacity = 0; expected = Error::InvalidManifest; break;
+		case 3: host.advertisedCapacity = 8193; expected = Error::InvalidManifest; break;
+		case 4: host.advertisedCapacity = 4; expected = Error::MetadataTooLarge; break;
+		case 5: host.manifestError = Error::InvalidManifest; expected = Error::InvalidManifest; break;
+		}
+		Operation operation(1, millis(), 60000);
+		Release release;
+		bool newer = false;
+		assert(!discoverRelease(operation, release, newer));
+		assert(operation.error == expected);
+		assert(host.allocatedManifest == 0 && !host.tlsOpen && host.downloadDestructions == 1);
+	}
+}
+
+void delayedBodyResumes()
+{
+	Fixture fixture;
+	host.onDelay = [&]() {
+		if (host.now >= 9000) fixture.client().bytes = {1, 2, 3, 4};
+	};
+	assert(fixture.read() == 4);
+	assert(host.now == 9000 && fixture.operation.error == Error::None);
+}
+
+void repeatedSecureCleanup()
+{
+	{
+		VerifiedClient client;
+		client.sslclient->socket = 54;
+		client.stop();
+		assert(client.sslclient->socket == -1);
+		WiFiClientSecure &httpReference = client;
+		httpReference.stop();
+		client.sslclient->socket = 55;
+		httpReference.stop();
+		httpReference.stop();
+	}
+	assert((host.closedDescriptors == std::vector<int>{54, 55}));
+}
 }
 
 struct TestCase
@@ -390,6 +605,13 @@ const TestCase cases[] = {
 	{"destructor closes without draining", FirmwareUpdate::destructorWithoutDrain},
 	{"invalid read arguments fail", FirmwareUpdate::invalidArguments},
 	{"read respects caller buffer capacity", FirmwareUpdate::boundedRead},
+	{"TLS admission permits separate record buffers in fragmented heap", FirmwareUpdate::fragmentedTlsMemory},
+	{"body capacity uses Content-Length or a bounded fallback", FirmwareUpdate::exactBodyCapacity},
+	{"manifest is allocated exactly once after TLS and released after parse", FirmwareUpdate::manifestAllocationLifetime},
+	{"unknown manifest length remains bounded", FirmwareUpdate::manifestUnknownLength},
+	{"manifest allocation and parse failures clean up TLS and heap", FirmwareUpdate::manifestFailureCleanup},
+	{"body can resume after a nine-second pause within the operation deadline", FirmwareUpdate::delayedBodyResumes},
+	{"repeated TLS cleanup never closes an unrelated descriptor", FirmwareUpdate::repeatedSecureCleanup},
 };
 
 int main(int argc, char **argv)

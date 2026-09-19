@@ -210,20 +210,24 @@ bool discoverRelease(Operation &operation, Release &release, bool &newer)
 	if (!synchronizeClock(operation))
 		return false;
 	publishState(operation, State::Checking);
-	std::unique_ptr<char, decltype(&free)> json(
-		static_cast<char *>(malloc(FirmwareUpdateConfig::MAX_MANIFEST_BYTES + 1)), free);
-	if (!json)
-		return operation.fail(Error::OutOfMemory);
+	std::unique_ptr<char, decltype(&free)> json(nullptr, free);
 	size_t used = 0;
 	{
 		HttpsDownload download(operation);
 		if (!download.open("ota-manifest.json", nullptr, FirmwareUpdateConfig::MAX_MANIFEST_BYTES))
 			return false;
+		// Leave heap available for certificate verification across all redirects.
+		const size_t capacity = download.bodyCapacity();
+		if (!capacity || capacity > FirmwareUpdateConfig::MAX_MANIFEST_BYTES)
+			return operation.fail(Error::InvalidManifest);
+		json.reset(static_cast<char *>(malloc(capacity + 1)));
+		if (!json)
+			return operation.fail(Error::OutOfMemory);
 		uint8_t buffer[TRANSFER_BYTES];
 		int count;
 		while ((count = download.read(buffer, sizeof(buffer))) > 0)
 		{
-			if (used + static_cast<size_t>(count) > FirmwareUpdateConfig::MAX_MANIFEST_BYTES)
+			if (used + static_cast<size_t>(count) > capacity)
 				return operation.fail(Error::MetadataTooLarge);
 			memcpy(json.get() + used, buffer, static_cast<size_t>(count));
 			used += static_cast<size_t>(count);

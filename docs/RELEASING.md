@@ -233,6 +233,11 @@ uses `GH_TOKEN`. The identity file stays outside the served directory.
 
 ## Device behavior and troubleshooting
 
+Use 1.9.1 or newer for OTA. Version 1.9.0 can exhaust the heap during certificate
+verification or reject a fragmented heap before downloading. A device already on
+that version may require a USB installation of 1.9.1; the fix cannot repair the
+running downloader through a transfer it cannot complete.
+
 Use **DEVICE SETTINGS > FIRMWARE UPDATE** while not on track. Checking never installs
 an image; installation requires confirmation. There are no automatic startup checks,
 scheduled checks, or unattended updates. The updater keeps the screen awake, supports
@@ -257,6 +262,13 @@ signature, secure-boot, or eFuse policy.
 Normal local GT7 telemetry does not need internet. TLS trust roots and redirect-host
 policy are maintained in the firmware service; if GitHub changes its trust chain, update
 those roots in a release rather than adding an insecure fallback.
+
+The updater allocates manifest storage only after the TLS redirect handshakes and
+sizes it to the bounded response length. HTTP header scratch uses the reserved
+worker stack rather than occupying TLS heap. Body reads tolerate up to 60 seconds
+without progress, still within the five-minute installation deadline; cancellation
+and on-track checks continue during that wait. Request writes have a separate
+five-second limit.
 
 ## Hardware acceptance
 

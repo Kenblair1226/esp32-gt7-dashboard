@@ -1,4 +1,11 @@
 {
+  "1.9.1": [
+    "Fixed TLS certificate verification failures caused by allocating metadata and HTTP scratch buffers too early on low-memory ESP32 hardware.",
+    "Sized metadata buffers to the verified HTTP content length and corrected TLS memory admission for fragmented heaps.",
+    "Prevented repeated TLS cleanup from closing an unrelated descriptor in the pinned Arduino framework.",
+    "Allowed bounded TCP retransmission pauses during firmware downloads while keeping cancellation, activity guards and the five-minute installation deadline.",
+    "Devices running the affected 1.9.0 updater may need a USB installation of 1.9.1 before reliable OTA is available."
+  ],
   "1.9.0": [
     "Added manual GitHub firmware updates from Device Settings with installation confirmation, progress, cancellation and actionable errors.",
     "Added verified HTTPS downloads, SHA-256 and firmware identity checks, and protected inactive-slot writes for both display variants.",

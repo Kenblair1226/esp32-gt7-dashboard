@@ -119,6 +119,9 @@ release with the Web Installer, including its new partition table. Flashing only
 application onto the old layout does not enable OTA. The installer identifies older,
 USB-only versions; reinstalling one of those versions disables OTA again.
 
+Use **1.9.1 or newer**. The first OTA release, 1.9.0, has a low-memory TLS issue;
+if it cannot check or download, install 1.9.1 over USB while preserving NVS.
+
 1. Connect to Wi-Fi with internet access and leave the on-track GT7 session.
 2. Tap the display, then open **DEVICE SETTINGS > FIRMWARE UPDATE**.
 3. Check for an update and review the available version.

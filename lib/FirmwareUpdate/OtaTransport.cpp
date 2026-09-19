@@ -8,6 +8,7 @@
 #include <esp_heap_caps.h>
 #include <lwip/dns.h>
 #include <lwip/tcpip.h>
+#include <mbedtls/ssl_internal.h>
 #include <new>
 #include <strings.h>
 
@@ -16,13 +17,23 @@ namespace FirmwareUpdate
 namespace
 {
 constexpr uint32_t DNS_TIMEOUT_MS = 10000;
-constexpr uint32_t CONNECT_TIMEOUT_MS = 6000;
+constexpr uint32_t CONNECT_TIMEOUT_MS = 10000;
 constexpr uint32_t HANDSHAKE_TIMEOUT_MS = 10000;
-constexpr uint32_t READ_TIMEOUT_MS = 5000;
+constexpr uint32_t WRITE_TIMEOUT_MS = 5000;
+constexpr uint32_t READ_TIMEOUT_MS = 60000;
 constexpr uint32_t HEADER_TIMEOUT_MS = 15000;
 constexpr size_t MAX_HEADER_BYTES = 16384;
 constexpr size_t MAX_HEADER_LINE = 4096;
-constexpr size_t MIN_TLS_HEAP_BLOCK = 48000;
+constexpr size_t MIN_TLS_HEAP_BYTES = 64 * 1024;
+constexpr size_t MIN_TLS_HEAP_BLOCK = MBEDTLS_SSL_IN_BUFFER_LEN > MBEDTLS_SSL_OUT_BUFFER_LEN
+	? MBEDTLS_SSL_IN_BUFFER_LEN : MBEDTLS_SSL_OUT_BUFFER_LEN;
+
+bool hasTlsMemory()
+{
+	// TLS needs separate record buffers, not one contiguous 48 KiB allocation.
+	return heap_caps_get_free_size(MALLOC_CAP_8BIT) >= MIN_TLS_HEAP_BYTES &&
+		heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= MIN_TLS_HEAP_BLOCK;
+}
 
 uint32_t smaller(uint32_t a, uint32_t b) { return a < b ? a : b; }
 
@@ -125,6 +136,14 @@ class VerifiedClient : public WiFiClientSecure
 public:
 	explicit VerifiedClient(Operation &operation) : operation_(operation) {}
 
+	void stop() override
+	{
+		WiFiClientSecure::stop();
+		// Arduino 2.0.17 zeroes the context during cleanup. Repeated HTTP/TLS
+		// cleanup must not close the unrelated descriptor 0.
+		sslclient->socket = -1;
+	}
+
 	int connect(const char *host, uint16_t port, int32_t) override
 	{
 		if (port != 443 || !operation_.checkpoint())
@@ -161,7 +180,7 @@ public:
 	{
 		if (!operation_.checkpoint())
 			return 0;
-		sslclient->socket_timeout = smaller(READ_TIMEOUT_MS, operation_.remaining());
+		sslclient->socket_timeout = smaller(WRITE_TIMEOUT_MS, operation_.remaining());
 		return WiFiClientSecure::write(buffer, length);
 	}
 
@@ -210,7 +229,7 @@ struct HttpsDownload::Impl
 	// HTTPClient's stock header reader grows Strings until newline and has only
 	// an idle timeout. Keep its request/TLS implementation, but parse the small
 	// response header with explicit line, aggregate, and wall-clock limits.
-	bool readLine(size_t &headerBytes, uint32_t headerStarted)
+	bool readLine(char (&line)[MAX_HEADER_LINE], size_t &headerBytes, uint32_t headerStarted)
 	{
 		size_t length = 0;
 		while (operation.checkpoint())
@@ -248,6 +267,8 @@ struct HttpsDownload::Impl
 
 	bool headers()
 	{
+		// Use the reserved worker stack after TLS, not heap needed by its verifier.
+		char line[MAX_HEADER_LINE];
 		hasLength = false;
 		length = 0;
 		location[0] = '\0';
@@ -256,7 +277,7 @@ struct HttpsDownload::Impl
 		size_t headerBytes = 0;
 		const uint32_t started = millis();
 		lastRead = started;
-		if (!readLine(headerBytes, started))
+		if (!readLine(line, headerBytes, started))
 			return false;
 		if ((strncmp(line, "HTTP/1.0 ", 9) != 0 && strncmp(line, "HTTP/1.1 ", 9) != 0) ||
 			strlen(line) < 12 || line[9] < '1' || line[9] > '5' ||
@@ -264,7 +285,7 @@ struct HttpsDownload::Impl
 			(line[12] && line[12] != ' '))
 			return operation.fail(Error::HttpFailed);
 		operation.httpStatus = (line[9] - '0') * 100 + (line[10] - '0') * 10 + line[11] - '0';
-		while (readLine(headerBytes, started))
+		while (readLine(line, headerBytes, started))
 		{
 			if (!line[0])
 				return true;
@@ -318,7 +339,6 @@ struct HttpsDownload::Impl
 	RequestClient request;
 	char url[Policy::MAX_URL_BYTES + 1] = {};
 	char location[Policy::MAX_URL_BYTES + 1] = {};
-	char line[MAX_HEADER_LINE] = {};
 	uint32_t length = 0;
 	uint32_t maximum = 0;
 	uint32_t received = 0;
@@ -334,7 +354,7 @@ bool HttpsDownload::open(const char *filename, const char *releaseTag, uint32_t 
 {
 	if (!operation_.checkpoint())
 		return false;
-	if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < MIN_TLS_HEAP_BLOCK)
+	if (!hasTlsMemory())
 		return operation_.fail(Error::OutOfMemory);
 	impl_ = new (std::nothrow) Impl(operation_);
 	if (!impl_)
@@ -381,6 +401,11 @@ bool HttpsDownload::open(const char *filename, const char *releaseTag, uint32_t 
 		return true;
 	}
 	return false;
+}
+
+size_t HttpsDownload::bodyCapacity() const
+{
+	return impl_ ? (impl_->hasLength ? impl_->length : impl_->maximum) : 0;
 }
 
 int HttpsDownload::read(uint8_t *buffer, size_t capacity)
